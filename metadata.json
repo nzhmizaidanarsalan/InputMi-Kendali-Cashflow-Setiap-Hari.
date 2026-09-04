@@ -1,0 +1,6 @@
+{
+  "name": "InputMi",
+  "description": "Aplikasi Personal Cashflow & Financial Tracking cerdas untuk pengguna Indonesia dengan pencatatan arus kas, neraca aset & liabilitas, serta pemindai struk AI.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

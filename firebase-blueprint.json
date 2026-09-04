@@ -1,0 +1,125 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Informasi profil dan metadata pengguna",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      }
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Catatan transaksi pemasukan atau pengeluaran kas",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["income", "expense"] },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "note": { "type": "string" },
+        "receiptUrl": { "type": "string" },
+        "receiptFileName": { "type": "string" },
+        "receiptFileSize": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["type", "amount", "date", "title", "category", "paymentMethod", "createdAt"]
+    },
+    "Asset": {
+      "title": "Asset",
+      "description": "Item aset riil, bank, atau investasi pengguna",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "categoryLabel": { "type": "string" },
+        "value": { "type": "number" },
+        "monthlyChange": { "type": "string" },
+        "monthlyChangeType": { "type": "string" },
+        "notes": { "type": "string" },
+        "icon": { "type": "string" }
+      },
+      "required": ["name", "category", "categoryLabel", "value", "icon"]
+    },
+    "Liability": {
+      "title": "Liability",
+      "description": "Kewajiban atau hutang/cicilan pengguna",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "categoryLabel": { "type": "string" },
+        "totalRemaining": { "type": "number" },
+        "monthlyPayment": { "type": "number" },
+        "dueDate": { "type": "string" },
+        "monthlyChange": { "type": "string" },
+        "monthlyChangeType": { "type": "string" },
+        "icon": { "type": "string" }
+      },
+      "required": ["name", "category", "categoryLabel", "totalRemaining", "dueDate", "icon"]
+    },
+    "BalanceAuditChange": {
+      "title": "BalanceAuditChange",
+      "description": "Riwayat perubahan saldo dan mutasi neraca",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "changeAmount": { "type": "number" },
+        "type": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["name", "description", "changeAmount", "type", "date"]
+    },
+    "ScannedReceiptRecord": {
+      "title": "ScannedReceiptRecord",
+      "description": "Arsip struk yang pernah dipindai",
+      "type": "object",
+      "properties": {
+        "merchant": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileSize": { "type": "string" },
+        "status": { "type": "string" },
+        "category": { "type": "string" },
+        "paymentMethod": { "type": "string" }
+      },
+      "required": ["merchant", "amount", "date", "status", "category", "paymentMethod"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Dokumen profil per pengguna"
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Koleksi transaksi kas pengguna"
+    },
+    "/users/{userId}/assets/{assetId}": {
+      "schema": "Asset",
+      "description": "Koleksi aset pengguna"
+    },
+    "/users/{userId}/liabilities/{liabilityId}": {
+      "schema": "Liability",
+      "description": "Koleksi liabilitas pengguna"
+    },
+    "/users/{userId}/balanceChanges/{changeId}": {
+      "schema": "BalanceAuditChange",
+      "description": "Koleksi riwayat audit perubahan neraca pengguna"
+    },
+    "/users/{userId}/scannedReceipts/{receiptId}": {
+      "schema": "ScannedReceiptRecord",
+      "description": "Koleksi arsip struk pengguna"
+    }
+  }
+}
