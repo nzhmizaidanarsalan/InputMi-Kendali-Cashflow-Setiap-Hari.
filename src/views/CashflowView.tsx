@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useFinance } from '../context/FinanceContext';
 import { FilterModal, FilterOptions } from '../components/FilterModal';
-import { formatIDR, getGroupDateHeader } from '../utils/formatters';
+import { formatIDR, getCurrentDateStr, getGroupDateHeader } from '../utils/formatters';
 
 export const CashflowView: React.FC = () => {
   const {
@@ -68,11 +68,20 @@ export const CashflowView: React.FC = () => {
 
       // Period filter
       if (activePeriod === 'hari') {
-        return tx.date === '2026-09-04';
+        return tx.date === getCurrentDateStr();
       }
       if (activePeriod === 'minggu') {
-        const day = parseInt(tx.date.split('-')[2] || '1', 10);
-        return day >= 1 && day <= 7;
+        const txTime = new Date(tx.date).getTime();
+        const now = new Date();
+        const sevenDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+        return !isNaN(txTime) && txTime >= sevenDaysAgo;
+      }
+      if (activePeriod === 'bulan') {
+        const [year, month] = (tx.date || '').split('-');
+        const now = new Date();
+        const curYear = String(now.getFullYear());
+        const curMonth = String(now.getMonth() + 1).padStart(2, '0');
+        return year === curYear && month === curMonth;
       }
 
       return true;

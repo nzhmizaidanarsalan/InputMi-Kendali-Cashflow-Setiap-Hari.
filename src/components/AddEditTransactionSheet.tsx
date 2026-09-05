@@ -28,6 +28,7 @@ export const AddEditTransactionSheet: React.FC = () => {
   const [receiptFileName, setReceiptFileName] = useState<string | null>(null);
   const [receiptFileSize, setReceiptFileSize] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const expenseCategories = [
     'Belanja Harian',
@@ -129,8 +130,10 @@ export const AddEditTransactionSheet: React.FC = () => {
     setReceiptFileSize('850 KB');
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+
     const amountNum = parseIDR(nominalDisplay);
 
     if (amountNum <= 0) {
@@ -143,42 +146,51 @@ export const AddEditTransactionSheet: React.FC = () => {
       return;
     }
 
-    const cleanNote = note.trim() ? note.trim() : null;
-    const cleanReceiptUrl = receiptUrl || null;
-    const cleanReceiptFileName = receiptFileName || null;
-    const cleanReceiptFileSize = receiptFileSize || null;
+    setIsSaving(true);
 
-    if (editingTx) {
-      updateTransaction(editingTx.id, {
-        type,
-        amount: amountNum,
-        title: title.trim(),
-        category,
-        paymentMethod,
-        date,
-        time,
-        note: cleanNote,
-        receiptUrl: cleanReceiptUrl,
-        receiptFileName: cleanReceiptFileName,
-        receiptFileSize: cleanReceiptFileSize,
-      });
-    } else {
-      addTransaction({
-        type,
-        amount: amountNum,
-        title: title.trim(),
-        category,
-        paymentMethod,
-        date,
-        time,
-        note: cleanNote,
-        receiptUrl: cleanReceiptUrl,
-        receiptFileName: cleanReceiptFileName,
-        receiptFileSize: cleanReceiptFileSize,
-      });
+    try {
+      const cleanNote = note.trim() ? note.trim() : null;
+      const cleanReceiptUrl = receiptUrl || null;
+      const cleanReceiptFileName = receiptFileName || null;
+      const cleanReceiptFileSize = receiptFileSize || null;
+
+      if (editingTx) {
+        await updateTransaction(editingTx.id, {
+          type,
+          amount: amountNum,
+          title: title.trim(),
+          category,
+          paymentMethod,
+          date,
+          time,
+          note: cleanNote,
+          receiptUrl: cleanReceiptUrl,
+          receiptFileName: cleanReceiptFileName,
+          receiptFileSize: cleanReceiptFileSize,
+        });
+      } else {
+        await addTransaction({
+          type,
+          amount: amountNum,
+          title: title.trim(),
+          category,
+          paymentMethod,
+          date,
+          time,
+          note: cleanNote,
+          receiptUrl: cleanReceiptUrl,
+          receiptFileName: cleanReceiptFileName,
+          receiptFileSize: cleanReceiptFileSize,
+        });
+      }
+
+      closeAddTx();
+    } catch (err: any) {
+      console.error('Save transaction error:', err);
+      showToast('Gagal menyimpan transaksi: ' + (err?.message || 'Terjadi kesalahan'));
+    } finally {
+      setIsSaving(false);
     }
-
-    closeAddTx();
   };
 
   if (!isAddTxOpen) return null;
@@ -449,10 +461,20 @@ export const AddEditTransactionSheet: React.FC = () => {
             <button
               id="submit-transaction-btn"
               type="submit"
-              className="w-full min-h-[48px] rounded-xl bg-primary text-on-primary font-headline-sm text-headline-sm font-semibold flex items-center justify-center gap-2 shadow-md hover:opacity-95 active:scale-[0.99] transition-all"
+              disabled={isSaving}
+              className="w-full min-h-[48px] rounded-xl bg-primary text-on-primary font-headline-sm text-headline-sm font-semibold flex items-center justify-center gap-2 shadow-md hover:opacity-95 active:scale-[0.99] transition-all disabled:opacity-50 cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[20px]">save</span>
-              <span>{editingTx ? 'Perbarui Transaksi' : 'Simpan Transaksi'}</span>
+              {isSaving ? (
+                <>
+                  <div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                  <span>Menyimpan...</span>
+                </>
+              ) : (
+                <>
+                  <span className="material-symbols-outlined text-[20px]">save</span>
+                  <span>{editingTx ? 'Perbarui Transaksi' : 'Simpan Transaksi'}</span>
+                </>
+              )}
             </button>
           </div>
         </form>

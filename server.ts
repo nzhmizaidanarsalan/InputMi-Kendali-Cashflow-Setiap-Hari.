@@ -61,102 +61,158 @@ async function startServer() {
 
       const ai = getAiClient();
       if (!ai) {
-        // If Gemini API key is not configured, gracefully provide realistic OCR fallback simulation based on common Indonesian receipts
-        console.warn('GEMINI_API_KEY not configured. Falling back to local OCR analysis.');
-        return res.json({
-          success: true,
-          source: 'local-fallback',
-          data: {
-            type: 'expense',
-            amount: 185000,
-            date: '2026-09-04',
-            time: '12:45',
-            merchant: 'Grand Lucky SCBD',
-            category: 'Belanja Harian',
-            paymentMethod: 'QRIS BCA',
-            notes: 'Belanja mingguan bahan dapur & buah',
-            items: [
-              { name: 'Buah Segar', price: 65000, qty: 1 },
-              { name: 'Daging & Ayam', price: 95000, qty: 1 },
-              { name: 'Bumbu Dapur', price: 25000, qty: 1 },
-            ],
-            isUncertain: false,
-            uncertainFields: ['paymentMethod'],
-            detectionSummary: 'Struk supermarket berhasil dipindai dengan 3 item terdeteksi.',
-          },
+        return res.status(503).json({
+          success: false,
+          error: 'Layanan Gemini Vision belum terhubung (GEMINI_API_KEY tidak ditemukan). Anda dapat mengisi data struk secara manual.',
         });
       }
 
-      const prompt = `Anda adalah asisten AI ahli OCR keuangan dan struk belanja untuk transaksi Indonesia.
-Analisis gambar struk / bukti transfer / tagihan ini secara mendalam dan teliti.
-Ekstrak informasi transaksi berikut dalam format JSON:
-- type: 'expense' (pengeluaran/struk belanja) atau 'income' (pemasukan/bukti transfer masuk/slip gaji)
-- amount: angka bulat dalam Rupiah (misal 185000, BUKAN string "Rp 185.000")
-- date: format YYYY-MM-DD (jika tahun tidak tertera, gunakan 2026)
-- time: format HH:mm (24 jam)
-- merchant: nama toko / merchant / penyedia jasa / pengirim
-- category: saran kategori yang tepat (misal: 'Belanja Harian', 'Kuliner', 'Transportasi', 'Tagihan & Langganan', 'Karir & Gaji', 'Bisnis', 'Investasi', 'Lainnya')
-- paymentMethod: metode pembayaran jika terdeteksi (misal: 'QRIS', 'Debit BCA', 'Transfer BCA', 'Bank Mandiri', 'Tunai', 'Kartu Kredit', 'GoPay', 'ShopeePay', dll)
-- notes: deskripsi ringkas transaksi atau daftar belanjaan
-- items: rincian barang/layanan berupa array of { name: string, price: number, qty?: number }
-- isUncertain: boolean true jika gambar buram, nilai terpotong, atau tidak terbaca jelas
-- uncertainFields: array field yang kurang jelas (contoh: ['amount', 'paymentMethod'])
-- detectionSummary: ringkasan hasil bacaan dalam bahasa Indonesia yang ramah dan jelas.
+      const prompt = `Anda adalah asisten AI ahli OCR dan analisis dokumen keuangan untuk Indonesia.
+Tugas Anda adalah membaca dan menganalisis gambar struk belanja, tiket kasir, bukti QRIS, atau bukti transfer perbankan/e-wallet.
 
-PENTING TENTANG KEAMANAN OCR KEUANGAN:
+Aturan Deteksi Jenis Transaksi:
+1. Struk Toko / Merchant (Indomaret, Alfamart, Supermarket, Restoran, Kafe, SPBU, Toko Retail, dll) -> type: 'expense'.
+2. Bukti Transfer Keluar / Pembayaran (Transfer Berhasil, Pembayaran Berhasil, Kirim Uang, QRIS Berhasil dari BCA, Mandiri, BRI, BNI, GoPay, OVO, ShopeePay, Dana, Flip, dll) -> type: 'expense'.
+3. Bukti Transfer Masuk / Penerimaan Dana (Transfer Masuk, Uang Diterima, Dana Masuk, Top Up Berhasil, Gaji Masuk) -> type: 'income'.
+
+Format Ekstraksi Data JSON:
+- type: 'expense' atau 'income'
+- amount: angka bulat positif dalam Rupiah (integer, contoh: 25000 atau 1250000. JANGAN gunakan string atau titik/koma). Ambil total pembayaran akhir / total transfer yang sah.
+- date: tanggal transaksi format YYYY-MM-DD (jika tahun tidak tertera, gunakan 2026).
+- time: waktu transaksi format HH:mm (24 jam, contoh: "14:35").
+- merchant: nama toko, merchant, penerima transfer, atau pengirim transfer.
+- category: saran kategori yang tepat:
+  * Untuk expense: 'Belanja Harian', 'Kuliner', 'Transportasi', 'Tagihan & Langganan', 'Hiburan', 'Kesehatan', 'Pendidikan', 'Lainnya'
+  * Untuk income: 'Karir & Gaji', 'Bisnis', 'Investasi', 'Hadiah & Bonus', 'Penjualan Aset', 'Lainnya'
+- paymentMethod: metode pembayaran jika terdeteksi (contoh: 'QRIS BCA', 'Transfer BCA', 'Debit BCA', 'Bank Mandiri', 'GoPay', 'ShopeePay', 'OVO', 'Tunai', 'Kartu Kredit', dll).
+- referenceNo: nomor referensi / No. Transaksi / Ref ID / Trace Number jika terlihat jelas pada bukti transfer atau struk.
+- description: keterangan singkat transaksi (contoh: 'Pembayaran belanja Indomaret', 'Transfer ke Budi Santoso', dll).
+- notes: catatan rincian belanja atau keterangan transfer.
+- items: rincian barang/jasa jika terbaca (array of { name: string, price: number, qty?: number }).
+- isUncertain: boolean true jika gambar buram, nilai terpotong, atau tidak terbaca jelas.
+- uncertainFields: array field yang kurang jelas atau tidak dapat dipastikan (contoh: ['amount', 'paymentMethod']).
+- detectionSummary: ringkasan ramah dalam bahasa Indonesia tentang apa yang berhasil dibaca.
+
+PENTING TENTANG KEAMANAN KEUANGAN:
 Jangan pernah mengarang angka jika tidak yakin. Jika nominal atau nama toko meragukan, tandai di uncertainFields.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: cleanMime,
-                data: cleanBase64,
-              },
-            },
-            {
-              text: prompt,
-            },
-          ],
-        },
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              type: { type: Type.STRING, enum: ['expense', 'income'] },
-              amount: { type: Type.NUMBER },
-              date: { type: Type.STRING },
-              time: { type: Type.STRING },
-              merchant: { type: Type.STRING },
-              category: { type: Type.STRING },
-              paymentMethod: { type: Type.STRING },
-              notes: { type: Type.STRING },
-              items: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    price: { type: Type.NUMBER },
-                    qty: { type: Type.NUMBER },
-                  },
-                  required: ['name', 'price'],
+      let response;
+      const primaryModel = 'gemini-3.8-flash';
+      try {
+        response = await ai.models.generateContent({
+          model: primaryModel,
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: cleanMime,
+                  data: cleanBase64,
                 },
               },
-              isUncertain: { type: Type.BOOLEAN },
-              uncertainFields: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
+              {
+                text: prompt,
               },
-              detectionSummary: { type: Type.STRING },
-            },
-            required: ['type', 'amount', 'date', 'merchant', 'category'],
+            ],
           },
-        },
-      });
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                type: { type: Type.STRING, enum: ['expense', 'income'] },
+                amount: { type: Type.NUMBER },
+                date: { type: Type.STRING },
+                time: { type: Type.STRING },
+                merchant: { type: Type.STRING },
+                category: { type: Type.STRING },
+                paymentMethod: { type: Type.STRING },
+                referenceNo: { type: Type.STRING },
+                description: { type: Type.STRING },
+                notes: { type: Type.STRING },
+                items: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      price: { type: Type.NUMBER },
+                      qty: { type: Type.NUMBER },
+                    },
+                    required: ['name', 'price'],
+                  },
+                },
+                isUncertain: { type: Type.BOOLEAN },
+                uncertainFields: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+                detectionSummary: { type: Type.STRING },
+              },
+              required: ['type', 'amount', 'date', 'merchant', 'category'],
+            },
+          },
+        });
+      } catch (geminiError: any) {
+        const msg = String(geminiError?.message || '');
+        if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('not found')) {
+          console.warn(`Model ${primaryModel} returned 404, falling back to gemini-2.5-flash...`);
+          response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: cleanMime,
+                    data: cleanBase64,
+                  },
+                },
+                {
+                  text: prompt,
+                },
+              ],
+            },
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  type: { type: Type.STRING, enum: ['expense', 'income'] },
+                  amount: { type: Type.NUMBER },
+                  date: { type: Type.STRING },
+                  time: { type: Type.STRING },
+                  merchant: { type: Type.STRING },
+                  category: { type: Type.STRING },
+                  paymentMethod: { type: Type.STRING },
+                  referenceNo: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  notes: { type: Type.STRING },
+                  items: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        name: { type: Type.STRING },
+                        price: { type: Type.NUMBER },
+                        qty: { type: Type.NUMBER },
+                      },
+                      required: ['name', 'price'],
+                    },
+                  },
+                  isUncertain: { type: Type.BOOLEAN },
+                  uncertainFields: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                  detectionSummary: { type: Type.STRING },
+                },
+                required: ['type', 'amount', 'date', 'merchant', 'category'],
+              },
+            },
+          });
+        } else {
+          throw geminiError;
+        }
+      }
 
       const text = response.text;
       if (!text) {

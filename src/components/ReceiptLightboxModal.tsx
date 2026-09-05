@@ -1,16 +1,29 @@
 import React from 'react';
 import { useFinance } from '../context/FinanceContext';
 
-export const ReceiptLightboxModal: React.FC = () => {
-  const { lightboxImageUrl, closeLightbox } = useFinance();
+interface ReceiptLightboxModalProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+  imageUrl?: string | null;
+}
 
-  if (!lightboxImageUrl) return null;
+export const ReceiptLightboxModal: React.FC<ReceiptLightboxModalProps> = ({
+  isOpen,
+  onClose,
+  imageUrl,
+}) => {
+  const context = useFinance();
+  const activeUrl = imageUrl !== undefined ? imageUrl : context.lightboxImageUrl;
+  const handleClose = onClose || context.closeLightbox;
+
+  const isVisible = isOpen !== undefined ? isOpen : !!activeUrl;
+  if (!isVisible || !activeUrl) return null;
 
   return (
     <div
       id="receipt-lightbox-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 transition-opacity animate-in fade-in"
-      onClick={closeLightbox}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-3 sm:p-4 transition-opacity animate-in fade-in"
+      onClick={handleClose}
     >
       <div
         className="relative max-w-lg w-full max-h-[90vh] bg-surface-container-lowest rounded-2xl overflow-hidden shadow-2xl flex flex-col"
@@ -25,28 +38,28 @@ export const ReceiptLightboxModal: React.FC = () => {
             id="close-lightbox-btn"
             type="button"
             aria-label="Tutup"
-            onClick={closeLightbox}
+            onClick={handleClose}
             className="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center text-on-surface transition-colors"
           >
             <span className="material-symbols-outlined text-[18px]">close</span>
           </button>
         </div>
 
-        <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-surface-container-lowest">
+        <div className="flex-1 overflow-auto p-2 sm:p-4 flex items-center justify-center bg-surface-container-lowest">
           <img
-            src={lightboxImageUrl}
+            src={activeUrl}
             alt="Struk Pembayaran"
-            className="max-h-[70vh] w-auto object-contain rounded-lg shadow-sm"
+            className="max-h-[70vh] max-w-full w-auto object-contain rounded-lg shadow-sm"
           />
         </div>
 
         <div className="p-3 bg-surface flex items-center justify-between border-t border-surface-container">
           <span className="font-label-sm text-label-sm text-on-surface-variant">
-            Tersimpan aman di data lokal
+            Lampiran Bukti Transaksi
           </span>
           <button
             type="button"
-            onClick={closeLightbox}
+            onClick={handleClose}
             className="px-4 py-1.5 rounded-full bg-primary text-on-primary font-label-sm text-label-sm font-semibold active:scale-95 transition-transform"
           >
             Tutup

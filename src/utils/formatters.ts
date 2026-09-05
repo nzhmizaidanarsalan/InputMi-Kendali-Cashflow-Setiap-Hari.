@@ -21,9 +21,17 @@ export function formatNumberIDR(amount: number): string {
   return Math.abs(Math.round(amount)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 
-export function parseIDR(str: string): number {
+export function parseIDR(str: string | number): number {
+  if (typeof str === 'number') {
+    return isNaN(str) || !Number.isFinite(str) ? 0 : Math.round(str);
+  }
   if (!str) return 0;
-  const clean = str.replace(/[^0-9]/g, '');
+  
+  let s = String(str).trim();
+  // Strip trailing cents like ,00 or .00 if present
+  s = s.replace(/,\d{2}$/, '').replace(/\.00$/, '');
+  // Extract all digit characters
+  const clean = s.replace(/[^0-9]/g, '');
   return parseInt(clean, 10) || 0;
 }
 
@@ -43,9 +51,22 @@ export function formatIndoDate(dateStr: string): string {
   }
 }
 
+export function getCurrentDateStr(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function getGroupDateHeader(dateStr: string): string {
-  const today = '2026-09-04';
-  const yesterday = '2026-09-03';
+  const today = getCurrentDateStr();
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const yYear = d.getFullYear();
+  const yMonth = String(d.getMonth() + 1).padStart(2, '0');
+  const yDay = String(d.getDate()).padStart(2, '0');
+  const yesterday = `${yYear}-${yMonth}-${yDay}`;
 
   if (dateStr === today) {
     return `HARI INI • ${formatIndoDate(dateStr).toUpperCase()}`;
@@ -54,10 +75,6 @@ export function getGroupDateHeader(dateStr: string): string {
     return `KEMARIN • ${formatIndoDate(dateStr).toUpperCase()}`;
   }
   return formatIndoDate(dateStr).toUpperCase();
-}
-
-export function getCurrentDateStr(): string {
-  return '2026-09-04';
 }
 
 export function getCurrentTimeStr(): string {

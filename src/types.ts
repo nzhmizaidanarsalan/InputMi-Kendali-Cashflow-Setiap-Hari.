@@ -87,6 +87,8 @@ export interface ReceiptScanResult {
   merchant: string;
   category: string;
   paymentMethod: string;
+  referenceNo?: string;
+  description?: string;
   notes: string;
   items?: TransactionItem[];
   isUncertain: boolean;

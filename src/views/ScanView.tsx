@@ -40,16 +40,22 @@ export const ScanView: React.FC = () => {
 
   // Extracted data state for review and editing
   const [reviewData, setReviewData] = useState<ReceiptScanResult | null>(null);
+  const [isManualFallback, setIsManualFallback] = useState<boolean>(false);
   const [editableNominal, setEditableNominal] = useState<string>('');
   const [editableMerchant, setEditableMerchant] = useState<string>('');
   const [editableCategory, setEditableCategory] = useState<string>('Belanja Harian');
   const [editablePayment, setEditablePayment] = useState<string>('QRIS BCA');
   const [editableDate, setEditableDate] = useState<string>(getCurrentDateStr());
   const [editableTime, setEditableTime] = useState<string>(getCurrentTimeStr());
+  const [editableDescription, setEditableDescription] = useState<string>('');
+  const [editableRefNo, setEditableRefNo] = useState<string>('');
   const [editableNotes, setEditableNotes] = useState<string>('');
   const [editableType, setEditableType] = useState<TransactionType>('expense');
   const [duplicateWarning, setDuplicateWarning] = useState<Transaction | null>(null);
   const [showItemDetails, setShowItemDetails] = useState<boolean>(true);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  const nominalInputRef = useRef<HTMLInputElement>(null);
 
   // Clean up object URLs on component unmount
   useEffect(() => {
@@ -108,9 +114,10 @@ export const ScanView: React.FC = () => {
     setScanError(null);
     setDuplicateWarning(null);
 
+    let processed;
     try {
       // 1. Process image: downscale, convert to clean JPEG, validate format & size, safe preview
-      const processed = await processImageForOcr(file, source);
+      processed = await processImageForOcr(file, source);
 
       // Clean up previous preview URL to prevent memory leaks
       if (currentPreviewUrl) {
@@ -121,7 +128,18 @@ export const ScanView: React.FC = () => {
       setCurrentDataUrl(processed.dataUrl);
       setCurrentFileName(processed.fileName);
       setCurrentFileSize(processed.fileSizeStr);
+    } catch (processErr: any) {
+      console.error('Image processing error:', processErr);
+      const friendlyMsg =
+        processErr?.message ||
+        'Format file tidak didukung. Harap pilih foto struk atau screenshot berformat JPG, JPEG, PNG, atau WEBP.';
+      setScanError(friendlyMsg);
+      showToast(friendlyMsg);
+      setIsScanning(false);
+      return;
+    }
 
+    try {
       // 2. Call OCR backend API with clean base64 data
       const response = await fetch('/api/scan-receipt', {
         method: 'POST',
@@ -140,18 +158,23 @@ export const ScanView: React.FC = () => {
         throw new Error(result.error || 'Gagal memindai struk dengan AI Vision.');
       }
 
-      // 3. Populate review fields
+      // 3. Populate review fields from AI
       const extracted: ReceiptScanResult = result.data;
       setReviewData(extracted);
+      setIsManualFallback(false);
       setEditableType(extracted.type || 'expense');
-      setEditableNominal(formatNumberIDR(extracted.amount || 0));
+      setEditableNominal(extracted.amount ? formatNumberIDR(extracted.amount) : '');
       setEditableMerchant(extracted.merchant || '');
       setEditableCategory(
         extracted.category || (extracted.type === 'income' ? 'Lainnya' : 'Belanja Harian')
       );
-      setEditablePayment(extracted.paymentMethod || 'QRIS BCA');
+      setEditablePayment(
+        extracted.paymentMethod || (source === 'transfer' ? 'Transfer BCA' : 'QRIS BCA')
+      );
       setEditableDate(extracted.date || getCurrentDateStr());
       setEditableTime(extracted.time || getCurrentTimeStr());
+      setEditableDescription(extracted.description || '');
+      setEditableRefNo(extracted.referenceNo || '');
       setEditableNotes(extracted.notes || '');
 
       // Check for duplicate transaction in database
@@ -167,11 +190,97 @@ export const ScanView: React.FC = () => {
       showToast('Struk berhasil dipindai oleh AI Vision.');
     } catch (err: any) {
       console.error('Scan error:', err);
-      const friendlyMsg =
-        err?.message ||
-        'Gagal membaca gambar. Pastikan struk terlihat jelas dan coba lagi.';
-      setScanError(friendlyMsg);
-      showToast('Gagal membaca gambar struk.');
+      // Requirement 8: Manual Fallback
+      // "If AI/OCR fails:
+      //  Do not block the workflow.
+      //  Keep the uploaded image attached.
+      //  Open manual transaction entry.
+      //  Show: 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.'
+      //  Provide: Isi Manual, Coba Scan Lagi, Pilih Gambar Lain"
+      const fallbackData: ReceiptScanResult = {
+        type: source === 'transfer' ? 'expense' : 'expense',
+        amount: 0,
+        date: getCurrentDateStr(),
+        time: getCurrentTimeStr(),
+        merchant: '',
+        category: 'Belanja Harian',
+        paymentMethod: source === 'transfer' ? 'Transfer BCA' : 'Tunai',
+        referenceNo: '',
+        description: '',
+        notes: '',
+        items: [],
+        isUncertain: true,
+        uncertainFields: ['amount', 'merchant', 'category', 'paymentMethod'],
+        detectionSummary: 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.',
+      };
+
+      setReviewData(fallbackData);
+      setIsManualFallback(true);
+      setEditableType('expense');
+      setEditableNominal('');
+      setEditableMerchant('');
+      setEditableCategory('Belanja Harian');
+      setEditablePayment(source === 'transfer' ? 'Transfer BCA' : 'Tunai');
+      setEditableDate(getCurrentDateStr());
+      setEditableTime(getCurrentTimeStr());
+      setEditableDescription('');
+      setEditableRefNo('');
+      setEditableNotes('');
+      setScanError('Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.');
+      showToast('Gambar berhasil dimuat. Silakan lengkapi data transaksi.');
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  // Re-scan the currently loaded photo without re-uploading
+  const handleRescanCurrentPhoto = async () => {
+    if (!currentDataUrl) {
+      handleRetryLastAction();
+      return;
+    }
+
+    setIsScanning(true);
+    setScanError(null);
+
+    try {
+      const cleanBase64 = currentDataUrl.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
+      const mimeMatch = currentDataUrl.match(/^data:([^;]+);base64,/);
+      const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+      const response = await fetch('/api/scan-receipt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: cleanBase64, mimeType }),
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Gagal membaca struk.');
+      }
+
+      const extracted: ReceiptScanResult = result.data;
+      setReviewData(extracted);
+      setIsManualFallback(false);
+      setEditableType(extracted.type || 'expense');
+      setEditableNominal(extracted.amount ? formatNumberIDR(extracted.amount) : '');
+      setEditableMerchant(extracted.merchant || '');
+      setEditableCategory(
+        extracted.category || (extracted.type === 'income' ? 'Lainnya' : 'Belanja Harian')
+      );
+      setEditablePayment(extracted.paymentMethod || 'QRIS BCA');
+      setEditableDate(extracted.date || getCurrentDateStr());
+      setEditableTime(extracted.time || getCurrentTimeStr());
+      setEditableDescription(extracted.description || '');
+      setEditableRefNo(extracted.referenceNo || '');
+      setEditableNotes(extracted.notes || '');
+
+      showToast('Struk berhasil dipindai oleh AI Vision.');
+    } catch (err: any) {
+      console.error('Rescan error:', err);
+      setIsManualFallback(true);
+      setScanError('Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.');
+      showToast('Data belum terbaca dengan yakin. Silakan lengkapi manual.');
     } finally {
       setIsScanning(false);
     }
@@ -188,12 +297,46 @@ export const ScanView: React.FC = () => {
     }
   };
 
-  // Save Transaction
-  const handleSaveTransaction = () => {
+  // Status badges: "Terdeteksi", "Perlu Dikonfirmasi", "Tidak Terbaca" (Requirement 6)
+  const getFieldStatusBadge = (fieldName: string, value: string | number | undefined) => {
+    const isUncertain = reviewData?.isUncertain && reviewData.uncertainFields?.includes(fieldName);
+    const isEmpty =
+      value === undefined ||
+      value === null ||
+      value === '' ||
+      value === 0 ||
+      value === '0';
+
+    if (isUncertain) {
+      return (
+        <span className="text-[10px] text-amber-800 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full font-semibold">
+          Perlu Dikonfirmasi
+        </span>
+      );
+    }
+    if (isEmpty) {
+      return (
+        <span className="text-[10px] text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded-full font-semibold">
+          Tidak Terbaca
+        </span>
+      );
+    }
+    return (
+      <span className="text-[10px] text-emerald-800 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-full font-semibold">
+        Terdeteksi
+      </span>
+    );
+  };
+
+  // Save Transaction (Requirement 7 & 9)
+  const handleSaveTransaction = async () => {
+    if (isSaving) return;
+
     const amountNum = parseIDR(editableNominal);
 
     if (amountNum <= 0) {
       showToast('Nominal harus lebih besar dari 0.');
+      nominalInputRef.current?.focus();
       return;
     }
 
@@ -202,57 +345,71 @@ export const ScanView: React.FC = () => {
       return;
     }
 
-    const cleanNote = editableNotes.trim() ? editableNotes.trim() : null;
-    const cleanReceiptUrl = currentDataUrl || currentPreviewUrl || null;
-    const cleanFileName = currentFileName || null;
-    const cleanFileSize = currentFileSize || null;
-    const cleanItems =
-      reviewData?.items && Array.isArray(reviewData.items) ? reviewData.items : [];
+    setIsSaving(true);
 
-    // Save to transactions
-    addTransaction({
-      type: editableType,
-      amount: amountNum,
-      title: editableMerchant.trim(),
-      category: editableCategory,
-      paymentMethod: editablePayment,
-      date: editableDate,
-      time: editableTime,
-      note: cleanNote,
-      receiptUrl: cleanReceiptUrl,
-      receiptFileName: cleanFileName,
-      receiptFileSize: cleanFileSize,
-      items: cleanItems,
-    });
+    try {
+      const cleanRef = editableRefNo.trim() ? `Ref: ${editableRefNo.trim()}` : null;
+      const cleanDesc = editableDescription.trim() || null;
+      const cleanUserNote = editableNotes.trim() || null;
+      const combinedNote = [cleanDesc, cleanRef, cleanUserNote].filter(Boolean).join(' • ') || null;
 
-    // Save to scanned history
-    if (cleanReceiptUrl) {
-      addScannedReceiptRecord({
-        merchant: editableMerchant.trim(),
+      const rawReceiptUrl = currentDataUrl || currentPreviewUrl || null;
+      const cleanFileName = currentFileName || null;
+      const cleanFileSize = currentFileSize || null;
+      const cleanItems =
+        reviewData?.items && Array.isArray(reviewData.items) ? reviewData.items : [];
+
+      // Save to transactions (persisted to Firestore when authenticated, and localStorage)
+      const savedTx = await addTransaction({
+        type: editableType,
         amount: amountNum,
-        date: editableDate,
-        time: editableTime,
-        imageUrl: cleanReceiptUrl,
-        fileName: currentFileName,
-        fileSize: currentFileSize,
-        status: 'Tersimpan',
+        title: editableMerchant.trim(),
         category: editableCategory,
         paymentMethod: editablePayment,
+        date: editableDate,
+        time: editableTime,
+        note: combinedNote,
+        receiptUrl: rawReceiptUrl,
+        receiptFileName: cleanFileName,
+        receiptFileSize: cleanFileSize,
+        items: cleanItems,
       });
-    }
 
-    // Clean up preview URL
-    if (currentPreviewUrl) {
-      revokeSafePreviewUrl(currentPreviewUrl);
-    }
+      // Save to scanned receipts history with the permanent storage URL or local preview
+      if (rawReceiptUrl) {
+        await addScannedReceiptRecord({
+          merchant: editableMerchant.trim(),
+          amount: amountNum,
+          date: editableDate,
+          time: editableTime,
+          imageUrl: savedTx?.receiptUrl || rawReceiptUrl,
+          fileName: currentFileName || 'struk.jpg',
+          fileSize: currentFileSize || '0 KB',
+          status: 'Tersimpan',
+          category: editableCategory,
+          paymentMethod: editablePayment,
+        });
+      }
 
-    // Reset review state and navigate to cashflow
-    setReviewData(null);
-    setCurrentPreviewUrl(null);
-    setCurrentDataUrl(null);
-    setDuplicateWarning(null);
-    showToast('Transaksi struk berhasil dicatat ke Cashflow!');
-    setActiveTab('cashflow');
+      // Clean up preview URL
+      if (currentPreviewUrl) {
+        revokeSafePreviewUrl(currentPreviewUrl);
+      }
+
+      // Reset review state and navigate to cashflow
+      setReviewData(null);
+      setCurrentPreviewUrl(null);
+      setCurrentDataUrl(null);
+      setDuplicateWarning(null);
+      setIsManualFallback(false);
+      showToast('Transaksi struk berhasil dicatat ke Cashflow!');
+      setActiveTab('cashflow');
+    } catch (err: any) {
+      console.error('Save transaction error:', err);
+      showToast('Gagal menyimpan: ' + (err?.message || 'Terjadi kesalahan saat menyimpan'));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleCancelReview = () => {
@@ -264,6 +421,7 @@ export const ScanView: React.FC = () => {
     setReviewData(null);
     setDuplicateWarning(null);
     setScanError(null);
+    setIsManualFallback(false);
   };
 
   const activeImage = currentPreviewUrl || currentDataUrl;
@@ -511,10 +669,10 @@ export const ScanView: React.FC = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-[22px] text-secondary">
-                verified
+                {isManualFallback ? 'edit_note' : 'verified'}
               </span>
               <h2 className="font-headline-sm text-headline-sm font-semibold text-on-surface">
-                Tinjau Hasil Pindaian
+                {isManualFallback ? 'Input Detail Transaksi' : 'Tinjau Hasil Pindaian'}
               </h2>
             </div>
             <button
@@ -526,7 +684,53 @@ export const ScanView: React.FC = () => {
             </button>
           </div>
 
-          {/* Uploaded Receipt Image Thumbnail Bar */}
+          {/* Fallback Banner if OCR was uncertain or encountered an issue (Requirement 8) */}
+          {isManualFallback && (
+            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 space-y-3 animate-in fade-in">
+              <div className="flex items-start gap-2.5">
+                <span className="material-symbols-outlined text-[22px] text-amber-700 shrink-0 mt-0.5">
+                  info
+                </span>
+                <div className="space-y-1">
+                  <p className="font-semibold text-label-md text-amber-950">
+                    Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.
+                  </p>
+                  <p className="text-xs text-amber-800 leading-relaxed">
+                    Foto struk tetap terlampir dengan aman. Anda dapat melengkapi nominal dan merchant di bawah, memindai ulang, atau memilih foto yang lebih jelas.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => nominalInputRef.current?.focus()}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-800 hover:bg-amber-900 text-white font-label-sm text-label-sm font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-[16px]">edit</span>
+                  <span>Isi Manual</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRescanCurrentPhoto}
+                  disabled={isScanning}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 font-label-sm text-label-sm font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <span className="material-symbols-outlined text-[16px]">sync</span>
+                  <span>{isScanning ? 'Memindai...' : 'Coba Scan Lagi'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => galleryInputRef.current?.click()}
+                  className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-amber-50 text-amber-900 border border-amber-200 font-label-sm text-label-sm font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[16px]">photo_library</span>
+                  <span>Pilih Gambar Lain</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Uploaded Receipt Image Thumbnail Bar (Requirement 7: Lampiran Gambar) */}
           {activeImage && (
             <div className="p-3 rounded-2xl bg-surface-container flex items-center justify-between gap-3">
               <div
@@ -536,25 +740,35 @@ export const ScanView: React.FC = () => {
                 <img
                   src={activeImage}
                   alt="Struk Preview"
-                  className="w-14 h-14 rounded-xl object-cover ring-1 ring-surface-container-highest shrink-0"
+                  className="w-14 h-14 rounded-xl object-cover ring-1 ring-surface-container-highest shrink-0 shadow-xs"
                 />
                 <div className="min-w-0 flex-1">
                   <p className="font-label-md text-label-md text-on-surface font-semibold truncate">
-                    {currentFileName || 'Foto Struk'}
+                    {currentFileName || 'Foto Lampiran Struk'}
                   </p>
                   <p className="font-body-sm text-[11px] text-on-surface-variant">
-                    {currentFileSize} • Ketuk untuk zoom gambar
+                    {currentFileSize} • Ketuk untuk melihat gambar penuh
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => openLightbox(activeImage)}
-                className="min-h-[34px] px-3 rounded-full bg-surface-container-lowest hover:bg-surface-container-high text-on-surface font-label-sm text-label-sm font-semibold flex items-center gap-1 shrink-0"
-              >
-                <span className="material-symbols-outlined text-[16px]">zoom_in</span>
-                <span>Zoom</span>
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => openLightbox(activeImage)}
+                  className="min-h-[34px] px-3 rounded-full bg-surface-container-lowest hover:bg-surface-container-high text-on-surface font-label-sm text-label-sm font-semibold flex items-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-[16px]">zoom_in</span>
+                  <span>Zoom</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => galleryInputRef.current?.click()}
+                  className="min-h-[34px] px-2.5 rounded-full bg-surface-container-lowest hover:bg-surface-container-high text-on-surface font-label-sm text-label-sm"
+                  title="Ganti Foto"
+                >
+                  <span className="material-symbols-outlined text-[16px]">photo_library</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -567,7 +781,7 @@ export const ScanView: React.FC = () => {
               </div>
               <p className="font-body-sm text-body-sm text-xs leading-relaxed">
                 Transaksi sebesar <strong>{formatIDR(duplicateWarning.amount)}</strong> pada{' '}
-                {duplicateWarning.date} di toko "{duplicateWarning.title}" sudah pernah dicatat sebelumnya.
+                {duplicateWarning.date} di "{duplicateWarning.title}" sudah pernah dicatat sebelumnya.
               </p>
               <div className="flex gap-2 pt-1">
                 <button
@@ -614,54 +828,50 @@ export const ScanView: React.FC = () => {
             </button>
           </div>
 
-          {/* Form Fields */}
+          {/* Form Fields (All User Editable) */}
           <div className="space-y-4">
-            {/* Nominal */}
+            {/* Nominal (IDR with Rp prefix and dot separator) */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
                   Total Nominal (IDR)
                 </label>
-                {(reviewData.uncertainFields?.includes('amount') || reviewData.isUncertain) && (
-                  <span className="text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full font-semibold">
-                    Perlu Dikonfirmasi
-                  </span>
-                )}
+                {getFieldStatusBadge('amount', editableNominal)}
               </div>
               <div className="relative">
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 font-headline-sm text-headline-sm font-bold text-on-surface-variant">
                   Rp
                 </span>
                 <input
+                  id="receipt-nominal-input"
+                  ref={nominalInputRef}
                   type="text"
                   inputMode="numeric"
+                  placeholder="0"
                   value={editableNominal}
                   onChange={(e) => {
                     const clean = e.target.value.replace(/\D/g, '');
                     setEditableNominal(clean ? formatNumberIDR(parseInt(clean, 10)) : '');
                   }}
-                  className="w-full min-h-[52px] pl-12 pr-4 rounded-xl bg-surface-container-low border border-surface-container font-headline-sm text-headline-sm font-bold text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                  className="w-full min-h-[52px] pl-12 pr-4 rounded-xl bg-surface-container-low border border-surface-container font-headline-sm text-headline-sm font-bold text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden font-stat-tabular"
                 />
               </div>
             </div>
 
-            {/* Merchant / Nama Toko */}
+            {/* Merchant / Nama Toko / Sumber */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
                   Nama Toko / Merchant / Sumber
                 </label>
-                {reviewData.uncertainFields?.includes('merchant') && (
-                  <span className="text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full font-semibold">
-                    Perlu Dikonfirmasi
-                  </span>
-                )}
+                {getFieldStatusBadge('merchant', editableMerchant)}
               </div>
               <input
+                id="receipt-merchant-input"
                 type="text"
                 value={editableMerchant}
                 onChange={(e) => setEditableMerchant(e.target.value)}
-                placeholder="Contoh: Superindo, Starbucks, BCA Transfer"
+                placeholder="Contoh: Indomaret, Superindo, BCA Transfer, Starbucks"
                 className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
               />
             </div>
@@ -673,13 +883,10 @@ export const ScanView: React.FC = () => {
                   <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
                     Kategori
                   </label>
-                  {reviewData.uncertainFields?.includes('category') && (
-                    <span className="text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full font-semibold">
-                      Perlu Dikonfirmasi
-                    </span>
-                  )}
+                  {getFieldStatusBadge('category', editableCategory)}
                 </div>
                 <select
+                  id="receipt-category-select"
                   value={editableCategory}
                   onChange={(e) => setEditableCategory(e.target.value)}
                   className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
@@ -697,13 +904,10 @@ export const ScanView: React.FC = () => {
                   <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
                     Metode Pembayaran
                   </label>
-                  {reviewData.uncertainFields?.includes('paymentMethod') && (
-                    <span className="text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full font-semibold">
-                      Perlu Dikonfirmasi
-                    </span>
-                  )}
+                  {getFieldStatusBadge('paymentMethod', editablePayment)}
                 </div>
                 <select
+                  id="receipt-payment-select"
                   value={editablePayment}
                   onChange={(e) => setEditablePayment(e.target.value)}
                   className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
@@ -720,10 +924,14 @@ export const ScanView: React.FC = () => {
             {/* Date & Time */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                  Tanggal
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                    Tanggal
+                  </label>
+                  {getFieldStatusBadge('date', editableDate)}
+                </div>
                 <input
+                  id="receipt-date-input"
                   type="date"
                   value={editableDate}
                   onChange={(e) => setEditableDate(e.target.value)}
@@ -731,13 +939,47 @@ export const ScanView: React.FC = () => {
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                  Waktu
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                    Waktu
+                  </label>
+                  {getFieldStatusBadge('time', editableTime)}
+                </div>
                 <input
+                  id="receipt-time-input"
                   type="time"
                   value={editableTime}
                   onChange={(e) => setEditableTime(e.target.value)}
+                  className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                />
+              </div>
+            </div>
+
+            {/* Description & Reference No */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                  Deskripsi Transaksi
+                </label>
+                <input
+                  id="receipt-description-input"
+                  type="text"
+                  value={editableDescription}
+                  onChange={(e) => setEditableDescription(e.target.value)}
+                  placeholder="Contoh: Belanja mingguan, Makan siang"
+                  className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                  Nomor Referensi (Opsional)
+                </label>
+                <input
+                  id="receipt-ref-input"
+                  type="text"
+                  value={editableRefNo}
+                  onChange={(e) => setEditableRefNo(e.target.value)}
+                  placeholder="Contoh: 2026090412345 / Trace No"
                   className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
                 />
               </div>
@@ -780,6 +1022,7 @@ export const ScanView: React.FC = () => {
                 Catatan Transaksi
               </label>
               <textarea
+                id="receipt-notes-input"
                 rows={2}
                 value={editableNotes}
                 onChange={(e) => setEditableNotes(e.target.value)}
@@ -794,25 +1037,45 @@ export const ScanView: React.FC = () => {
             <button
               id="confirm-save-receipt-btn"
               type="button"
+              disabled={isSaving}
               onClick={handleSaveTransaction}
-              className="w-full min-h-[50px] rounded-2xl bg-primary text-on-primary font-headline-sm text-headline-sm font-semibold flex items-center justify-center gap-2 active:scale-95 shadow-md"
+              className="w-full min-h-[50px] rounded-2xl bg-primary text-on-primary font-headline-sm text-headline-sm font-semibold flex items-center justify-center gap-2 active:scale-95 shadow-md hover:opacity-95 transition-all disabled:opacity-50 cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[20px]">save</span>
-              <span>Simpan Transaksi</span>
+              {isSaving ? (
+                <>
+                  <div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                  <span>Menyimpan Transaksi...</span>
+                </>
+              ) : (
+                <>
+                  <span className="material-symbols-outlined text-[20px]">save</span>
+                  <span>Simpan Transaksi</span>
+                </>
+              )}
             </button>
 
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => galleryInputRef.current?.click()}
-                className="flex-1 min-h-[42px] rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-medium"
+                onClick={handleRescanCurrentPhoto}
+                disabled={isScanning}
+                className="flex-1 min-h-[42px] rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
               >
-                Pindai Ulang
+                <span className="material-symbols-outlined text-[18px]">sync</span>
+                <span>Pindai Ulang</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => galleryInputRef.current?.click()}
+                className="flex-1 min-h-[42px] rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-medium flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[18px]">photo_library</span>
+                <span>Ganti Foto</span>
               </button>
               <button
                 type="button"
                 onClick={handleCancelReview}
-                className="flex-1 min-h-[42px] rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-medium"
+                className="min-h-[42px] px-4 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-medium transition-colors"
               >
                 Batal
               </button>
