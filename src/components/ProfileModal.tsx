@@ -22,6 +22,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
     exportDataJSON,
     resetToZero,
     loadDemoData,
+    showToast,
   } = useFinance();
 
   const [isEditingName, setIsEditingName] = useState(false);
@@ -44,7 +45,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
     if (!file) return;
 
     if (file.size > 2 * 1024 * 1024) {
-      alert('Ukuran foto maksimal 2MB.');
+      showToast('Ukuran foto maksimal 2MB.');
       return;
     }
 
@@ -434,10 +435,22 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
             )}
           </div>
 
-          <div className="p-3 rounded-xl bg-surface-container-low border border-surface-container text-center">
-            <p className="font-label-sm text-label-sm text-on-surface-variant">
-              InputMi • Personal Cashflow & Financial Tracking
-            </p>
+          <div className="p-3.5 rounded-2xl bg-surface-container-low border border-surface-container flex items-center justify-center gap-3 select-none">
+            <img
+              src="/icons/inputmi-icon.svg"
+              alt="InputMi"
+              className="w-9 h-9 rounded-lg shadow-xs shrink-0"
+              referrerPolicy="no-referrer"
+            />
+            <div className="text-left">
+              <p className="font-label-md text-label-md font-bold tracking-tight">
+                <span className="text-on-surface">Input</span>
+                <span className="text-[#289E77]">Mi</span>
+              </p>
+              <p className="font-body-sm text-[12px] text-on-surface-variant font-medium">
+                Kendali Cashflow Setiap Hari.
+              </p>
+            </div>
           </div>
         </div>
 

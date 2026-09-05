@@ -29,11 +29,11 @@ export function sanitizeForFirestore<T = any>(value: any): T {
     if (isNaN(value) || !Number.isFinite(value)) {
       return 0 as unknown as T;
     }
-    return value;
+    return value as unknown as T;
   }
 
   if (value === null || typeof value !== 'object') {
-    return value;
+    return value as unknown as T;
   }
 
   if (value instanceof Date) {

@@ -26,6 +26,7 @@ import {
   sanitizeForFirestore,
 } from '../utils/firestoreSanitizer';
 import { uploadReceiptToStorage } from '../utils/storageUpload';
+import { formatNumberIDR } from '../utils/formatters';
 import {
   ActiveTab,
   Asset,
@@ -1125,7 +1126,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const remaining = Math.max(0, liab.totalRemaining - amount);
     const updates = {
       totalRemaining: remaining,
-      monthlyChange: `-Rp ${amount.toLocaleString('id-ID')} lunas`,
+      monthlyChange: `-Rp ${formatNumberIDR(amount)} lunas`,
       monthlyChangeType: 'positive' as const,
     };
 

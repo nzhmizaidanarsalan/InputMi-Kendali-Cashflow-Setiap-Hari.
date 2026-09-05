@@ -25,12 +25,16 @@ export const Header: React.FC<HeaderProps> = ({ onOpenProfile, onOpenNotificatio
       <div className="h-full px-4 flex items-center justify-between max-w-2xl mx-auto">
         {/* Logo & Month Picker */}
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 cursor-pointer">
-            <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center text-on-primary font-bold shadow-xs">
-              <span className="material-symbols-outlined text-[20px]">account_balance_wallet</span>
-            </div>
-            <span className="font-headline-sm text-headline-sm text-on-surface tracking-tight font-bold">
-              InputMi
+          <div className="flex items-center gap-2 cursor-pointer select-none">
+            <img
+              src="/icons/inputmi-icon.svg"
+              alt="InputMi"
+              className="w-8 h-8 rounded-lg shadow-xs shrink-0"
+              referrerPolicy="no-referrer"
+            />
+            <span className="font-headline-sm text-headline-sm tracking-tight font-bold">
+              <span className="text-on-surface">Input</span>
+              <span className="text-[#289E77]">Mi</span>
             </span>
           </div>
 

@@ -1,5 +1,5 @@
 export function formatIDR(amount: number): string {
-  if (isNaN(amount)) return 'Rp 0';
+  if (typeof amount !== 'number' || isNaN(amount) || !Number.isFinite(amount)) return 'Rp 0';
   const isNegative = amount < 0;
   const absVal = Math.abs(Math.round(amount));
   const formatted = absVal.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
@@ -7,6 +7,7 @@ export function formatIDR(amount: number): string {
 }
 
 export function formatIDRSigned(amount: number, type: 'income' | 'expense'): string {
+  if (typeof amount !== 'number' || isNaN(amount) || !Number.isFinite(amount)) return 'Rp 0';
   const absVal = Math.abs(Math.round(amount));
   const formatted = absVal.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
   if (type === 'income') {
@@ -16,7 +17,7 @@ export function formatIDRSigned(amount: number, type: 'income' | 'expense'): str
 }
 
 export function formatNumberIDR(amount: number): string {
-  if (isNaN(amount)) return '0';
+  if (typeof amount !== 'number' || isNaN(amount) || !Number.isFinite(amount)) return '0';
   return Math.abs(Math.round(amount)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 

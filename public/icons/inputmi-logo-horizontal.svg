@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 140" width="540" height="140">
+  <!-- Left App Icon -->
+  <g transform="translate(10, 10)">
+    <!-- Squircle Background -->
+    <rect x="0" y="0" width="120" height="120" rx="30" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5" />
+    
+    <!-- Viewfinder corners -->
+    <g fill="none" stroke="#15272E" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 20 36 L 20 28 A 8 8 0 0 1 28 20 L 36 20" />
+      <path d="M 84 20 L 92 20 A 8 8 0 0 1 100 28 L 100 36" />
+      <path d="M 20 84 L 20 92 A 8 8 0 0 0 28 100 L 36 100" />
+      <path d="M 84 100 L 92 100 A 8 8 0 0 0 100 92 L 100 84" />
+    </g>
+
+    <!-- Receipt paper -->
+    <path d="M 37 29 A 4 4 0 0 1 41 25 L 67 25 L 83 41 L 83 91 L 78 87 L 73 91 L 68 87 L 63 91 L 58 87 L 53 91 L 48 87 L 43 91 L 40 88 L 37 90 Z" 
+          fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5" />
+
+    <!-- Folded green corner -->
+    <path d="M 67 25 L 67 37 A 4 4 0 0 0 71 41 L 83 41 Z" fill="#289E77" />
+
+    <!-- Text dashes -->
+    <rect x="43" y="34" width="15" height="3" rx="1.5" fill="#475569" />
+    <rect x="43" y="40" width="10" height="3" rx="1.5" fill="#94A3B8" />
+
+    <!-- Bar chart columns -->
+    <rect x="44" y="67" width="7" height="16" rx="3.5" fill="#7FD4B5" />
+    <rect x="54" y="56" width="7" height="27" rx="3.5" fill="#33B585" />
+    <rect x="64" y="45" width="7" height="38" rx="3.5" fill="#178761" />
+  </g>
+
+  <!-- Brand Typography -->
+  <!-- "Input" in deep slate navy -->
+  <text x="156" y="74" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="56" font-weight="700" fill="#15272E" letter-spacing="-1.5">Input</text>
+  <!-- "Mi" in emerald teal -->
+  <text x="306" y="74" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="56" font-weight="700" fill="#289E77" letter-spacing="-1.5">Mi</text>
+  
+  <!-- Slogan -->
+  <text x="158" y="108" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="20" font-weight="500" fill="#334155" letter-spacing="0.2">Kendali Cashflow Setiap Hari.</text>
+</svg>

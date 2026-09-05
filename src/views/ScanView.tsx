@@ -151,7 +151,7 @@ export const ScanView: React.FC = () => {
     if (!file) return;
 
     if (file.size > 15 * 1024 * 1024) {
-      alert('Ukuran file maksimal 15MB.');
+      showToast('Ukuran file maksimal 15MB.');
       return;
     }
 

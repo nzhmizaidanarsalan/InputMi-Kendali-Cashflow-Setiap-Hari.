@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Soft icon container shadow -->
+    <filter id="squircle-shadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#0f172a" flood-opacity="0.08" />
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.04" />
+    </filter>
+    <!-- Receipt shadow -->
+    <filter id="receipt-shadow" x="-15%" y="-10%" width="130%" height="125%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#091e18" flood-opacity="0.10" />
+    </filter>
+    <!-- Corner fold shadow -->
+    <filter id="fold-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="-2" dy="3" stdDeviation="3" flood-color="#000000" flood-opacity="0.16" />
+    </filter>
+  </defs>
+
+  <!-- Background App Squircle -->
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="#FFFFFF" filter="url(#squircle-shadow)" />
+
+  <!-- Subtle squircle border for contrast on light backgrounds -->
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="none" stroke="#F1F5F9" stroke-width="3" />
+
+  <!-- 4 Scanner Viewfinder Corner Brackets -->
+  <g fill="none" stroke="#15272E" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Top-Left -->
+    <path d="M 108 170 L 108 140 A 32 32 0 0 1 140 108 L 170 108" />
+    <!-- Top-Right -->
+    <path d="M 342 108 L 372 108 A 32 32 0 0 1 404 140 L 404 170" />
+    <!-- Bottom-Left -->
+    <path d="M 108 342 L 108 372 A 32 32 0 0 0 140 404 L 170 404" />
+    <!-- Bottom-Right -->
+    <path d="M 342 404 L 372 404 A 32 32 0 0 0 404 372 L 404 342" />
+  </g>
+
+  <!-- Receipt Body with Serrated Bottom -->
+  <g filter="url(#receipt-shadow)">
+    <!-- Main white paper polygon with folded corner and serrated bottom -->
+    <path d="
+      M 172 152 
+      A 16 16 0 0 1 188 136 
+      L 290 136 
+      L 348 194 
+      L 348 372 
+      L 335 362 L 322 372 L 309 362 L 296 372 
+      L 283 362 L 270 372 L 257 362 L 244 372 
+      L 231 362 L 218 372 L 205 362 L 192 372 
+      L 179 362 L 172 368
+      Z
+    " fill="#FFFFFF" stroke="#E2E8F0" stroke-width="2" />
+
+    <!-- Folded Green Corner Flap -->
+    <path d="M 290 136 L 290 180 A 14 14 0 0 0 304 194 L 348 194 Z" 
+          fill="#289E77" 
+          filter="url(#fold-shadow)" />
+  </g>
+
+  <!-- Receipt Header Text Dashes -->
+  <rect x="204" y="174" width="60" height="11" rx="5.5" fill="#475569" />
+  <rect x="204" y="196" width="40" height="11" rx="5.5" fill="#94A3B8" />
+
+  <!-- 3 Ascending Bar Chart Columns -->
+  <!-- Column 1 (Left - Light Mint) -->
+  <rect x="208" y="292" width="26" height="52" rx="11" fill="#7FD4B5" />
+
+  <!-- Column 2 (Center - Vibrant Teal) -->
+  <rect x="246" y="254" width="26" height="90" rx="11" fill="#33B585" />
+
+  <!-- Column 3 (Right - Deep Emerald) -->
+  <rect x="284" y="216" width="26" height="128" rx="11" fill="#178761" />
+</svg>

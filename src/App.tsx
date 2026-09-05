@@ -23,6 +23,7 @@ import { AnalyticsView } from './views/AnalyticsView';
 const MainAppContent: React.FC = () => {
   const {
     activeTab,
+    isAuthLoading,
     selectedPeriod,
     setSelectedPeriod,
     isAddTxOpen,
@@ -37,6 +38,43 @@ const MainAppContent: React.FC = () => {
 
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+
+  // Dynamic Browser Tab Title conforming to InputMi Official Branding
+  React.useEffect(() => {
+    const tabTitles: Record<string, string> = {
+      overview: 'Overview | InputMi',
+      cashflow: 'Cashflow | InputMi',
+      scan: 'Pindai Struk AI | InputMi',
+      balance: 'Balance | InputMi',
+      analytics: 'More | InputMi',
+    };
+    document.title = tabTitles[activeTab] || 'InputMi';
+  }, [activeTab]);
+
+  // Official InputMi Splash & Initial Loading Screen
+  if (isAuthLoading) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-surface antialiased select-none p-6">
+        <div className="flex flex-col items-center gap-3.5 animate-in fade-in duration-300">
+          <img
+            src="/icons/inputmi-icon.svg"
+            alt="InputMi"
+            className="w-16 h-16 rounded-2xl shadow-sm animate-pulse"
+            referrerPolicy="no-referrer"
+          />
+          <div className="text-center">
+            <h1 className="font-headline-md text-headline-md tracking-tight font-bold">
+              <span className="text-on-surface">Input</span>
+              <span className="text-[#289E77]">Mi</span>
+            </h1>
+            <p className="font-body-sm text-body-sm text-on-surface-variant font-medium mt-0.5">
+              Kendali Cashflow Setiap Hari.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-surface flex flex-col text-on-surface antialiased selection:bg-secondary-container selection:text-on-secondary-container">

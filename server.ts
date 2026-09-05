@@ -1,14 +1,9 @@
 import express from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
@@ -177,10 +172,17 @@ Jangan pernah mengarang angka jika tidak yakin. Jika nominal atau nama toko mera
     }
   });
 
+  // Serve public static assets (favicons, manifests, logos, open graph images) directly
+  app.use(express.static(path.join(process.cwd(), 'public')));
+
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
