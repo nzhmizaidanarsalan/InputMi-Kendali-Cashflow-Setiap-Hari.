@@ -79,21 +79,38 @@ export interface ScannedReceiptRecord {
   paymentMethod: string;
 }
 
+export type SourceMode = 'camera' | 'gallery' | 'transfer';
+
+export type DocumentType =
+  | 'receipt'
+  | 'transfer_proof'
+  | 'invoice'
+  | 'payment_screenshot'
+  | 'financial_document'
+  | 'unknown';
+
 export interface ReceiptScanResult {
+  documentType?: DocumentType;
   transactionType?: 'income' | 'expense' | 'unknown';
   type: TransactionType;
   amount: number | null;
   date: string | null;
   time: string | null;
   merchant: string | null;
-  category: string | null;
+  bankOrWallet?: string | null;
+  sender?: string | null;
+  recipient?: string | null;
   paymentMethod: string | null;
   referenceNumber?: string | null;
-  referenceNo?: string;
+  invoiceNumber?: string | null;
+  dueDate?: string | null;
   description?: string | null;
-  notes?: string;
+  category: string | null;
+  status?: string | null;
   confidence?: 'high' | 'medium' | 'low';
   items?: TransactionItem[];
+  referenceNo?: string;
+  notes?: string;
   isUncertain?: boolean;
   uncertainFields?: string[];
   detectionSummary?: string;

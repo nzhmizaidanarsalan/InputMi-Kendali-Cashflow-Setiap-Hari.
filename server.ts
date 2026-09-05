@@ -41,7 +41,11 @@ async function startServer() {
   // Receipt Scanner AI OCR API
   app.post('/api/scan-receipt', async (req, res) => {
     try {
-      const { imageBase64, mimeType = 'image/jpeg' } = req.body;
+      const { imageBase64, mimeType = 'image/jpeg', sourceMode = 'gallery' } = req.body;
+
+      // Validate sourceMode
+      const validSourceMode: 'camera' | 'gallery' | 'transfer' =
+        sourceMode === 'camera' || sourceMode === 'transfer' ? sourceMode : 'gallery';
 
       if (!imageBase64) {
         return res.status(200).json({
@@ -87,60 +91,126 @@ async function startServer() {
         });
       }
 
-      const prompt = `Anda adalah asisten AI ahli OCR dan analisis dokumen keuangan untuk Indonesia.
-Tugas Anda adalah membaca dan mengekstrak data dari gambar struk belanja, tiket kasir, bukti QRIS, atau bukti transfer perbankan/e-wallet.
+      // Contextual instructions based on sourceMode
+      let sourceModeContextInstruction = '';
+      if (validSourceMode === 'transfer') {
+        sourceModeContextInstruction = `Pengguna mengunggah gambar melalui mode 'Bukti Transfer' (sourceMode="transfer").
+Prioritas dugaan awal: Bukti transfer bank (BCA, Mandiri, BRI, BNI, dll), konfirmasi e-wallet (GoPay, OVO, DANA, ShopeePay), tangkapan layar transaksi digital, atau pembayaran QRIS.
+Catatan: Verifikasi visual dokumen tetap menjadi penentu utama. Jika secara visual gambar ternyata struk fisik toko atau faktur, klasifikasikan sesuai tampilan visual sebenarnya.`;
+      } else if (validSourceMode === 'camera') {
+        sourceModeContextInstruction = `Pengguna mengambil foto langsung dengan kamera (sourceMode="camera").
+Kemungkinan besar berupa: Struk fisik kertas belanja toko/minimarket/restoran/SPBU, faktur tagihan fisik, atau cetakan struk EDC/ATM.
+Lakukan klasifikasi visual terlebih dahulu.`;
+      } else {
+        sourceModeContextInstruction = `Pengguna memilih gambar dari galeri perangkat (sourceMode="gallery").
+Bisa berupa: Foto struk fisik, tangkapan layar bukti transfer m-banking, bukti pembayaran QRIS/e-wallet, atau unduhan faktur/tagihan.
+JANGAN berasumsi bahwa galeri pasti struk belanja. Klasifikasikan berdasarkan konten visual gambar.`;
+      }
 
-Format kembalian HARUS berupa JSON murni tanpa markdown, dengan struktur PERSIS seperti ini:
+      const prompt = `Anda adalah asisten AI Vision ahli analitik dan OCR dokumen transaksi keuangan Indonesia.
+Analisis gambar dokumen yang diberikan dengan alur penalaran 2 tahap (Two-Stage Reasoning Flow):
+
+====================================================
+KONTEKS INPUT PENGGUNA:
+sourceMode: "${validSourceMode}"
+${sourceModeContextInstruction}
+
+====================================================
+TAHAP 1: KLASIFIKASI DOKUMEN (Document Classification)
+====================================================
+Periksa gambar secara visual dan tentukan nilai "documentType" dari salah satu kategori berikut:
+1. "receipt": Struk fisik kasir/minimarket/toko kertas (contoh: Indomaret, Alfamart, SPBU Pertamina, restoran, cafe, supermarket, parkir).
+2. "transfer_proof": Bukti konfirmasi transfer mobile banking atau internet banking (contoh: BCA Mobile, myBCA, Livin' by Mandiri, BRImo, BNI Mobile, Flip, Seabank, GoPay/OVO/DANA transfer antar bank).
+3. "payment_screenshot": Tangkapan layar status pembayaran sukses digital (contoh: QRIS, transaksi merchant GoPay, OVO, ShopeePay, DANA, kartu kredit digital).
+4. "invoice": Tagihan atau faktur penjualan barang/jasa yang memiliki nomor invoice, rincian tagihan, atau tanggal jatuh tempo.
+5. "financial_document": Dokumen keuangan lainnya seperti mutasi rekening, slip gaji, atau rekening koran.
+6. "unknown": Gambar tidak relevan dengan keuangan atau teks tidak dapat dibaca sama sekali.
+
+====================================================
+TAHAP 2: EKSTRAKSI DATA SPESIFIK SESUAI DOCUMENT TYPE
+====================================================
+
+A. Jika documentType == "receipt":
+- merchant: Nama toko/restoran/minimarket (contoh: 'Indomaret', 'Alfamart', 'Kopi Kenangan').
+- amount: Cari dan prioritaskan nilai TOTAL AKHIR pembayaran (TOTAL, GRAND TOTAL, TOTAL BAYAR, JUMLAH BAYAR, TOTAL PEMBAYARAN).
+  PENTING: Jangan tertukar dengan Subtotal, Pajak/PPN, Uang Tunai/Cash yang diserahkan pembeli, atau Kembalian.
+  Konversi angka ke integer bulat rupiah (misal "Rp 45.500" -> 45500).
+- date: Tanggal transaksi format YYYY-MM-DD (jika tahun tidak tertulis, gunakan 2026).
+- time: Waktu transaksi format HH:mm (24 jam).
+- paymentMethod: Metode pembayaran jika tertulis (contoh: 'Tunai', 'QRIS BCA', 'Debit Mandiri', 'GoPay').
+- referenceNumber: Nomor bon / nomor struk / transaksi ID.
+- category: Kategori belanja yang paling tepat: 'Belanja Harian', 'Kuliner', 'Transportasi', 'Tagihan & Langganan', 'Hiburan', 'Kesehatan', 'Pendidikan', 'Lainnya'.
+- transactionType: "expense".
+- items: Array rincian belanja [{ "name": string, "price": number, "qty": number }].
+
+B. Jika documentType == "transfer_proof":
+- amount: Nominal dana transfer (angka bulat Rupiah).
+- bankOrWallet: Nama bank atau dompet digital (contoh: 'BCA', 'Bank Mandiri', 'BRI', 'BNI', 'GoPay', 'DANA', 'OVO', 'ShopeePay', 'Flip', dll).
+- sender: Nama pengirim atau nomor rekening pengirim jika terlihat.
+- recipient: Nama penerima atau nomor rekening tujuan.
+- referenceNumber: Nomor referensi / No. Referensi / Ref ID / ID Transaksi.
+- date: Tanggal transfer format YYYY-MM-DD.
+- time: Waktu transfer format HH:mm.
+- status: Status transfer (contoh: "Berhasil", "Sukses", "Pending").
+- description: Berita atau keterangan transfer.
+- merchant: Isi dengan nama penerima atau nama bank tujuan (untuk label transaksi).
+- transactionType:
+  * "expense" jika bukti transfer keluar / kirim uang / bayar ke orang lain.
+  * "income" jika bukti transfer masuk / dana diterima / top up masuk.
+  * "unknown" jika arah aliran dana tidak jelas.
+
+C. Jika documentType == "payment_screenshot":
+- amount: Nominal pembayaran yang berhasil (angka bulat).
+- merchant: Nama merchant atau toko penerima pembayaran.
+- paymentMethod: Metode pembayaran digital (contoh: 'QRIS BCA', 'GoPay', 'ShopeePay', 'OVO', 'DANA').
+- referenceNumber: Ref ID / RRN / No. Transaksi.
+- date: Tanggal transaksi format YYYY-MM-DD.
+- time: Jam transaksi format HH:mm.
+- status: Status (misal "Berhasil", "Sukses").
+- category: Kategori yang sesuai.
+- transactionType: "expense".
+
+D. Jika documentType == "invoice":
+- merchant: Nama vendor atau penerbit tagihan/faktur.
+- invoiceNumber: Nomor invoice / nomor faktur / nomor tagihan.
+- amount: Total nominal tagihan (angka bulat).
+- dueDate: Tanggal jatuh tempo format YYYY-MM-DD jika ada.
+- date: Tanggal faktur terbit format YYYY-MM-DD.
+- description: Deskripsi tagihan / layanan yang ditagihkan.
+- status: Status faktur (JANGAN anggap otomatis lunas jika belum ada bukti lunas).
+- transactionType: "expense".
+
+====================================================
+ATURAN CONFIDENCE & KELENGKAPAN:
+====================================================
+- "high": amount terdeteksi DITAMBAH minimal 2 kolom berguna lainnya (seperti merchant/bankOrWallet/sender/recipient/date/referenceNumber).
+- "medium": amount terdeteksi DITAMBAH 1 kolom berguna lainnya, ATAU terdapat minimal 2 kolom berguna non-nominal terdeteksi.
+- "low": hanya jika hampir tidak ada data transaksi yang dapat dikenali.
+PENTING: Ekstraksi parsial adalah KEBERHASILAN. JANGAN memberikan "low" jika amount dan salah satu nama bank/merchant/referensi terdeteksi.
+
+KEMBALIKAN HANYA JSON MURNI DENGAN STRUKTUR BERIKUT (tanpa markdown dan tanpa teks pembuka):
 {
-  "transactionType": "income | expense | unknown",
+  "documentType": "receipt" | "transfer_proof" | "invoice" | "payment_screenshot" | "financial_document" | "unknown",
+  "transactionType": "income" | "expense" | "unknown",
   "amount": number | null,
   "date": "YYYY-MM-DD" | null,
   "time": "HH:mm" | null,
   "merchant": string | null,
+  "bankOrWallet": string | null,
+  "sender": string | null,
+  "recipient": string | null,
   "paymentMethod": string | null,
   "referenceNumber": string | null,
+  "invoiceNumber": string | null,
+  "dueDate": string | null,
   "description": string | null,
   "category": string | null,
-  "confidence": "high | medium | low"
-}
-
-ATURAN STRUK BELANJA:
-- merchant: Nama toko/merchant (contoh: Indomaret, Alfamart, SPBU Pertamina, Toko, Restoran, Kafe, dll).
-- amount: Cari dan prioritaskan TOTAL, GRAND TOTAL, TOTAL BAYAR, TOTAL PEMBAYARAN, atau JUMLAH BAYAR.
-  PENTING: Jangan tertukar dengan Subtotal, Pajak/PPN, Nominal Tunai yang diserahkan pembeli, atau Uang Kembalian.
-  Konversi format angka Indonesia menjadi angka bulat (integer), contoh:
-  "Rp 25.000" -> 25000
-  "25.000" -> 25000
-  "Rp25,000" -> 25000
-  "1.250.000" -> 1250000
-  "IDR 50,000" -> 50000
-- date: Tanggal transaksi format YYYY-MM-DD (jika tahun tidak tertera, gunakan 2026).
-- time: Waktu transaksi format HH:mm (24 jam, contoh: "14:35").
-- category: Kategori yang sesuai: 'Belanja Harian', 'Kuliner', 'Transportasi', 'Tagihan & Langganan', 'Hiburan', 'Kesehatan', 'Pendidikan', atau 'Lainnya'.
-- paymentMethod: Metode pembayaran jika tertera (contoh: 'Tunai', 'QRIS BCA', 'Debit Mandiri', 'GoPay', 'ShopeePay', dll).
-- referenceNumber: Nomor struk / No. Transaksi / Bon ID jika tertera.
-- transactionType: 'expense'.
-
-ATURAN BUKTI TRANSFER / MUTASI:
-- amount: Nominal dana yang ditransfer atau diterima (dalam Rupiah bulat).
-- transactionType: Tentukan dengan teliti:
-  * Jika bukti transfer keluar / kirim dana / pembayaran sukses -> "expense".
-  * Jika bukti transfer masuk / dana diterima / top up masuk -> "income".
-  * Jika arah transaksi tidak dapat dipastikan dari gambar -> "unknown" (JANGAN mengarang).
-- merchant: Nama penerima atau nama pengirim transfer atau nama bank/merchant.
-- paymentMethod: Sumber bank/e-wallet (contoh: 'Transfer BCA', 'Bank Mandiri', 'BRI', 'BNI', 'GoPay', 'Dana', 'OVO', 'ShopeePay', dll).
-- referenceNumber: Nomor referensi / No. Referensi / Ref ID / ID Transaksi.
-- date: Tanggal transfer format YYYY-MM-DD.
-- time: Jam transfer format HH:mm.
-- description: Keterangan atau catatan transfer jika ada.
-
-ATURAN CONFIDENCE & KELENGKAPAN:
-- Jika suatu kolom tidak terdeteksi pada gambar, isi dengan null. JANGAN membatalkan pemindaian hanya karena satu field tidak ada.
-- "high": nominal (amount) + nama merchant/sumber + tanggal terdeteksi jelas.
-- "medium": nominal (amount) terdeteksi ditambah minimal satu field lain (merchant, metode, tanggal, atau nomor referensi).
-- "low": tidak ada data transaksi yang berguna terbaca.
-
-HANYA kembalikan JSON murni, tanpa teks pembuka, dan tanpa format markdown.`;
+  "status": string | null,
+  "confidence": "high" | "medium" | "low",
+  "items": [
+    { "name": string, "price": number, "qty": number }
+  ]
+}`;
 
       // Multimodal Candidate Models list (active in Google AI Studio)
       const CANDIDATE_MODELS = [
@@ -241,16 +311,61 @@ HANYA kembalikan JSON murni, tanpa teks pembuka, dan tanpa format markdown.`;
         }
       }
 
-      // Compute practical confidence rules (Requirement 7)
-      const rawAmount = parsed.amount;
-      const numericAmount =
-        typeof rawAmount === 'number' && !isNaN(rawAmount) && rawAmount > 0
-          ? Math.round(rawAmount)
-          : null;
+      // Safe Extraction & Normalization
+      // 1. Amount
+      let numericAmount: number | null = null;
+      if (typeof parsed.amount === 'number' && !isNaN(parsed.amount) && parsed.amount > 0) {
+        numericAmount = Math.round(parsed.amount);
+      } else if (typeof parsed.amount === 'string') {
+        const digitsOnly = parsed.amount.replace(/[^\d]/g, '');
+        if (digitsOnly.length > 0) {
+          const pNum = parseInt(digitsOnly, 10);
+          if (!isNaN(pNum) && pNum > 0) {
+            numericAmount = pNum;
+          }
+        }
+      }
 
+      // 2. Document Type
+      const allowedDocTypes = [
+        'receipt',
+        'transfer_proof',
+        'invoice',
+        'payment_screenshot',
+        'financial_document',
+        'unknown',
+      ];
+      let docType =
+        typeof parsed.documentType === 'string' && allowedDocTypes.includes(parsed.documentType.toLowerCase())
+          ? parsed.documentType.toLowerCase()
+          : 'unknown';
+
+      // If unknown but sourceMode was transfer and we have bank or transfer fields
+      if (docType === 'unknown' && validSourceMode === 'transfer') {
+        if (parsed.bankOrWallet || parsed.recipient || parsed.sender) {
+          docType = 'transfer_proof';
+        }
+      }
+
+      // 3. String fields
       const merchantStr =
         typeof parsed.merchant === 'string' && parsed.merchant.trim()
           ? parsed.merchant.trim()
+          : null;
+
+      const bankOrWalletStr =
+        typeof parsed.bankOrWallet === 'string' && parsed.bankOrWallet.trim()
+          ? parsed.bankOrWallet.trim()
+          : null;
+
+      const senderStr =
+        typeof parsed.sender === 'string' && parsed.sender.trim()
+          ? parsed.sender.trim()
+          : null;
+
+      const recipientStr =
+        typeof parsed.recipient === 'string' && parsed.recipient.trim()
+          ? parsed.recipient.trim()
           : null;
 
       const dateStr =
@@ -268,9 +383,21 @@ HANYA kembalikan JSON murni, tanpa teks pembuka, dan tanpa format markdown.`;
           ? parsed.referenceNumber.trim()
           : null;
 
+      const invoiceNoStr =
+        typeof parsed.invoiceNumber === 'string' && parsed.invoiceNumber.trim()
+          ? parsed.invoiceNumber.trim()
+          : null;
+
+      const dueDateStr =
+        typeof parsed.dueDate === 'string' && parsed.dueDate.trim()
+          ? parsed.dueDate.trim()
+          : null;
+
       const paymentStr =
         typeof parsed.paymentMethod === 'string' && parsed.paymentMethod.trim()
           ? parsed.paymentMethod.trim()
+          : bankOrWalletStr
+          ? `Transfer ${bankOrWalletStr}`
           : null;
 
       const descStr =
@@ -281,6 +408,11 @@ HANYA kembalikan JSON murni, tanpa teks pembuka, dan tanpa format markdown.`;
       const categoryStr =
         typeof parsed.category === 'string' && parsed.category.trim()
           ? parsed.category.trim()
+          : null;
+
+      const statusStr =
+        typeof parsed.status === 'string' && parsed.status.trim()
+          ? parsed.status.trim()
           : null;
 
       // Determine transaction type
@@ -297,63 +429,94 @@ HANYA kembalikan JSON murni, tanpa teks pembuka, dan tanpa format markdown.`;
         rawTxType = 'unknown';
       }
 
-      // Confidence Evaluation
+      // Requirement 6: Confidence Evaluation
+      // HIGH: amount plus at least two useful fields
+      // MEDIUM: amount plus one useful field OR at least two useful non-amount transaction fields
+      // LOW: essentially nothing useful detected
       const hasAmount = numericAmount !== null && numericAmount > 0;
-      const hasMerchant = merchantStr !== null;
-      const hasDate = dateStr !== null;
-      const hasRef = refNoStr !== null;
-      const hasPayment = paymentStr !== null;
+      const usefulNonAmountValues = [
+        merchantStr,
+        bankOrWalletStr,
+        senderStr,
+        recipientStr,
+        refNoStr,
+        invoiceNoStr,
+        dateStr,
+        paymentStr,
+        descStr,
+      ].filter((v): v is string => Boolean(v && v.trim().length > 0));
+
+      const nonAmountUsefulCount = usefulNonAmountValues.length;
+      const detectedFieldCount = (hasAmount ? 1 : 0) + nonAmountUsefulCount;
 
       let confidence: 'high' | 'medium' | 'low' = 'low';
-      if (hasAmount && (hasMerchant || hasPayment) && hasDate) {
+      if (hasAmount && nonAmountUsefulCount >= 2) {
         confidence = 'high';
-      } else if (hasAmount && (hasMerchant || hasPayment || hasDate || hasRef)) {
+      } else if (hasAmount && nonAmountUsefulCount >= 1) {
         confidence = 'medium';
-      } else if (hasAmount || hasMerchant || hasRef) {
+      } else if (hasAmount) {
+        confidence = 'medium';
+      } else if (nonAmountUsefulCount >= 2) {
         confidence = 'medium';
       } else {
         confidence = 'low';
       }
 
-      // If model itself provided high/medium/low, respect it if consistent
-      if (['high', 'medium', 'low'].includes(parsed.confidence)) {
-        if (confidence !== 'low') {
-          confidence = parsed.confidence;
-        }
-      }
+      // Safe telemetry logging (Requirement 9: Never log raw image or sensitive financial values)
+      console.log('[AI Document Analysis]', {
+        sourceMode: validSourceMode,
+        documentType: docType,
+        detectedFieldCount,
+        confidence,
+        modelUsed: usedModel,
+      });
 
       const uncertainList: string[] = [];
       if (!hasAmount) uncertainList.push('amount');
-      if (!hasMerchant) uncertainList.push('merchant');
-      if (!hasDate) uncertainList.push('date');
-      if (!hasPayment) uncertainList.push('paymentMethod');
+      if (!merchantStr && !bankOrWalletStr && !recipientStr) uncertainList.push('merchant');
+      if (!dateStr) uncertainList.push('date');
+      if (!paymentStr) uncertainList.push('paymentMethod');
 
       const isUncertain = confidence === 'low';
 
-      const summaryText =
-        confidence === 'high'
-          ? `Berhasil membaca: ${merchantStr || 'Merchant'}, ${numericAmount ? 'Rp ' + numericAmount.toLocaleString('id-ID') : ''} (${dateStr || 'Hari ini'})`
-          : confidence === 'medium'
-          ? `Data terdeteksi sebagian: ${numericAmount ? 'Rp ' + numericAmount.toLocaleString('id-ID') : merchantStr || 'Struk/Transfer'}. Silakan periksa kembali.`
-          : 'Gambar berhasil dimuat, tetapi data transaksi belum terbaca dengan yakin.';
+      // Summary label
+      let summaryText = 'Gambar berhasil dimuat, tetapi data transaksi belum terbaca dengan yakin.';
+      const displayName =
+        merchantStr ||
+        recipientStr ||
+        (bankOrWalletStr ? `Transfer ${bankOrWalletStr}` : null) ||
+        (docType === 'receipt' ? 'Struk Toko' : 'Bukti Transaksi');
+
+      if (confidence === 'high') {
+        summaryText = `Berhasil membaca: ${displayName}, ${numericAmount ? 'Rp ' + numericAmount.toLocaleString('id-ID') : ''} (${dateStr || 'Hari ini'})`;
+      } else if (confidence === 'medium') {
+        summaryText = `Data terdeteksi: ${displayName}${numericAmount ? ' - Rp ' + numericAmount.toLocaleString('id-ID') : ''}. Silakan tinjau kembali.`;
+      }
 
       const finalData = {
-        // Requested format fields
+        // Structured format per Requirement 5
+        documentType: docType,
         transactionType: rawTxType,
         amount: numericAmount,
         date: dateStr,
         time: timeStr,
-        merchant: merchantStr,
+        merchant: merchantStr || recipientStr || bankOrWalletStr || null,
+        bankOrWallet: bankOrWalletStr,
+        sender: senderStr,
+        recipient: recipientStr,
         paymentMethod: paymentStr,
         referenceNumber: refNoStr,
+        invoiceNumber: invoiceNoStr,
+        dueDate: dueDateStr,
         description: descStr,
         category: categoryStr,
+        status: statusStr,
         confidence,
 
         // Backwards-compatible fields for existing UI components
         type: txType,
-        referenceNo: refNoStr || '',
-        notes: descStr || '',
+        referenceNo: refNoStr || invoiceNoStr || '',
+        notes: descStr || (statusStr ? `Status: ${statusStr}` : ''),
         isUncertain,
         uncertainFields: uncertainList,
         detectionSummary: summaryText,

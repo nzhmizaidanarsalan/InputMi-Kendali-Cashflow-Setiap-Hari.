@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useFinance } from '../context/FinanceContext';
-import { ReceiptScanResult, Transaction, TransactionType } from '../types';
+import { DocumentType, ReceiptScanResult, SourceMode, Transaction, TransactionType } from '../types';
 import {
   formatIDR,
   formatNumberIDR,
@@ -37,12 +37,19 @@ export const ScanView: React.FC = () => {
   const [currentFileName, setCurrentFileName] = useState<string>('');
   const [currentFileSize, setCurrentFileSize] = useState<string>('');
   const [lastSource, setLastSource] = useState<'kamera' | 'galeri' | 'transfer'>('kamera');
+  const [lastSourceMode, setLastSourceMode] = useState<SourceMode>('camera');
 
   // Extracted data state for review and editing
   const [reviewData, setReviewData] = useState<ReceiptScanResult | null>(null);
+  const [docType, setDocType] = useState<DocumentType>('receipt');
   const [isManualFallback, setIsManualFallback] = useState<boolean>(false);
   const [editableNominal, setEditableNominal] = useState<string>('');
   const [editableMerchant, setEditableMerchant] = useState<string>('');
+  const [editableBankOrWallet, setEditableBankOrWallet] = useState<string>('');
+  const [editableSender, setEditableSender] = useState<string>('');
+  const [editableRecipient, setEditableRecipient] = useState<string>('');
+  const [editableInvoiceNumber, setEditableInvoiceNumber] = useState<string>('');
+  const [editableDueDate, setEditableDueDate] = useState<string>('');
   const [editableCategory, setEditableCategory] = useState<string>('Belanja Harian');
   const [editablePayment, setEditablePayment] = useState<string>('QRIS BCA');
   const [editableDate, setEditableDate] = useState<string>(getCurrentDateStr());
@@ -109,7 +116,11 @@ export const ScanView: React.FC = () => {
 
     if (!file) return;
 
+    const sourceMode: SourceMode =
+      source === 'kamera' ? 'camera' : source === 'transfer' ? 'transfer' : 'gallery';
+
     setLastSource(source);
+    setLastSourceMode(sourceMode);
     setIsScanning(true);
     setScanError(null);
     setDuplicateWarning(null);
@@ -140,7 +151,7 @@ export const ScanView: React.FC = () => {
     }
 
     try {
-      // 2. Call OCR backend API with clean base64 data
+      // 2. Call OCR backend API with clean base64 data and contextual sourceMode
       const response = await fetch('/api/scan-receipt', {
         method: 'POST',
         headers: {
@@ -149,6 +160,7 @@ export const ScanView: React.FC = () => {
         body: JSON.stringify({
           imageBase64: processed.cleanBase64,
           mimeType: processed.mimeType,
+          sourceMode,
         }),
       });
 
@@ -165,13 +177,12 @@ export const ScanView: React.FC = () => {
       const extracted: ReceiptScanResult = result.data;
       setReviewData(extracted);
 
-      // Practical Confidence Check (Requirement 7):
-      // A scan is successful when useful data (amount, merchant/source, date, or reference) is detected.
-      const isLowConfidence =
-        extracted.confidence === 'low' &&
-        !extracted.amount &&
-        !extracted.merchant &&
-        !extracted.referenceNumber;
+      const detectedDocType: DocumentType =
+        extracted.documentType || (sourceMode === 'transfer' ? 'transfer_proof' : 'receipt');
+      setDocType(detectedDocType);
+
+      // Practical Confidence Check: High and Medium are successful extractions
+      const isLowConfidence = extracted.confidence === 'low';
 
       const txType =
         extracted.transactionType === 'income' || extracted.type === 'income'
@@ -181,11 +192,24 @@ export const ScanView: React.FC = () => {
       setEditableType(txType);
       setEditableNominal(extracted.amount ? formatNumberIDR(extracted.amount) : '');
       setEditableMerchant(extracted.merchant || '');
+      setEditableBankOrWallet(
+        extracted.bankOrWallet || (detectedDocType === 'transfer_proof' ? 'BCA' : '')
+      );
+      setEditableSender(extracted.sender || '');
+      setEditableRecipient(extracted.recipient || '');
+      setEditableInvoiceNumber(extracted.invoiceNumber || '');
+      setEditableDueDate(extracted.dueDate || '');
       setEditableCategory(
-        extracted.category || (txType === 'income' ? 'Lainnya' : 'Belanja Harian')
+        extracted.category ||
+          (detectedDocType === 'transfer_proof'
+            ? (txType === 'income' ? 'Karir & Gaji' : 'Lainnya')
+            : (txType === 'income' ? 'Lainnya' : 'Belanja Harian'))
       );
       setEditablePayment(
-        extracted.paymentMethod || (source === 'transfer' ? 'Transfer BCA' : 'QRIS BCA')
+        extracted.paymentMethod ||
+          (detectedDocType === 'transfer_proof'
+            ? (extracted.bankOrWallet ? `Transfer ${extracted.bankOrWallet}` : 'Transfer BCA')
+            : 'QRIS BCA')
       );
       setEditableDate(extracted.date || getCurrentDateStr());
       setEditableTime(extracted.time || getCurrentTimeStr());
@@ -289,7 +313,11 @@ export const ScanView: React.FC = () => {
       const response = await fetch('/api/scan-receipt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: cleanBase64, mimeType }),
+        body: JSON.stringify({
+          imageBase64: cleanBase64,
+          mimeType,
+          sourceMode: lastSourceMode,
+        }),
       });
 
       const result = await response.json();
@@ -302,11 +330,11 @@ export const ScanView: React.FC = () => {
       const extracted: ReceiptScanResult = result.data;
       setReviewData(extracted);
 
-      const isLowConfidence =
-        extracted.confidence === 'low' &&
-        !extracted.amount &&
-        !extracted.merchant &&
-        !extracted.referenceNumber;
+      const detectedDocType: DocumentType =
+        extracted.documentType || (lastSourceMode === 'transfer' ? 'transfer_proof' : 'receipt');
+      setDocType(detectedDocType);
+
+      const isLowConfidence = extracted.confidence === 'low';
 
       const txType =
         extracted.transactionType === 'income' || extracted.type === 'income'
@@ -316,10 +344,25 @@ export const ScanView: React.FC = () => {
       setEditableType(txType);
       setEditableNominal(extracted.amount ? formatNumberIDR(extracted.amount) : '');
       setEditableMerchant(extracted.merchant || '');
-      setEditableCategory(
-        extracted.category || (txType === 'income' ? 'Lainnya' : 'Belanja Harian')
+      setEditableBankOrWallet(
+        extracted.bankOrWallet || (detectedDocType === 'transfer_proof' ? 'BCA' : '')
       );
-      setEditablePayment(extracted.paymentMethod || 'QRIS BCA');
+      setEditableSender(extracted.sender || '');
+      setEditableRecipient(extracted.recipient || '');
+      setEditableInvoiceNumber(extracted.invoiceNumber || '');
+      setEditableDueDate(extracted.dueDate || '');
+      setEditableCategory(
+        extracted.category ||
+          (detectedDocType === 'transfer_proof'
+            ? (txType === 'income' ? 'Karir & Gaji' : 'Lainnya')
+            : (txType === 'income' ? 'Lainnya' : 'Belanja Harian'))
+      );
+      setEditablePayment(
+        extracted.paymentMethod ||
+          (detectedDocType === 'transfer_proof'
+            ? (extracted.bankOrWallet ? `Transfer ${extracted.bankOrWallet}` : 'Transfer BCA')
+            : 'QRIS BCA')
+      );
       setEditableDate(extracted.date || getCurrentDateStr());
       setEditableTime(extracted.time || getCurrentTimeStr());
       setEditableDescription(extracted.description || '');
@@ -405,7 +448,19 @@ export const ScanView: React.FC = () => {
       return;
     }
 
-    if (!editableMerchant.trim()) {
+    const finalTitle =
+      editableMerchant.trim() ||
+      (docType === 'transfer_proof'
+        ? editableRecipient.trim()
+          ? `Transfer ke ${editableRecipient.trim()}`
+          : editableBankOrWallet.trim()
+          ? `Transfer ${editableBankOrWallet.trim()}`
+          : 'Bukti Transfer'
+        : docType === 'invoice'
+        ? 'Faktur Tagihan'
+        : 'Struk Belanja');
+
+    if (!finalTitle.trim()) {
       showToast('Harap isi nama merchant atau sumber transaksi.');
       return;
     }
@@ -413,10 +468,20 @@ export const ScanView: React.FC = () => {
     setIsSaving(true);
 
     try {
-      const cleanRef = editableRefNo.trim() ? `Ref: ${editableRefNo.trim()}` : null;
-      const cleanDesc = editableDescription.trim() || null;
-      const cleanUserNote = editableNotes.trim() || null;
-      const combinedNote = [cleanDesc, cleanRef, cleanUserNote].filter(Boolean).join(' • ') || null;
+      const noteParts: string[] = [];
+      if (docType === 'transfer_proof') {
+        if (editableBankOrWallet.trim()) noteParts.push(`Bank/E-Wallet: ${editableBankOrWallet.trim()}`);
+        if (editableSender.trim()) noteParts.push(`Pengirim: ${editableSender.trim()}`);
+        if (editableRecipient.trim()) noteParts.push(`Penerima: ${editableRecipient.trim()}`);
+      } else if (docType === 'invoice') {
+        if (editableInvoiceNumber.trim()) noteParts.push(`No. Faktur: ${editableInvoiceNumber.trim()}`);
+        if (editableDueDate.trim()) noteParts.push(`Jatuh Tempo: ${editableDueDate.trim()}`);
+      }
+      if (editableRefNo.trim()) noteParts.push(`Ref: ${editableRefNo.trim()}`);
+      if (editableDescription.trim()) noteParts.push(editableDescription.trim());
+      if (editableNotes.trim()) noteParts.push(editableNotes.trim());
+
+      const combinedNote = noteParts.length > 0 ? noteParts.join(' • ') : null;
 
       const rawReceiptUrl = currentDataUrl || currentPreviewUrl || null;
       const cleanFileName = currentFileName || null;
@@ -428,7 +493,7 @@ export const ScanView: React.FC = () => {
       const savedTx = await addTransaction({
         type: editableType,
         amount: amountNum,
-        title: editableMerchant.trim(),
+        title: finalTitle.trim(),
         category: editableCategory,
         paymentMethod: editablePayment,
         date: editableDate,
@@ -443,7 +508,7 @@ export const ScanView: React.FC = () => {
       // Save to scanned receipts history with the permanent storage URL or local preview
       if (rawReceiptUrl) {
         await addScannedReceiptRecord({
-          merchant: editableMerchant.trim(),
+          merchant: finalTitle.trim(),
           amount: amountNum,
           date: editableDate,
           time: editableTime,
@@ -893,162 +958,517 @@ export const ScanView: React.FC = () => {
             </button>
           </div>
 
-          {/* Form Fields (All User Editable) */}
+          {/* Document Type Indicator & Selector */}
+          <div className="flex items-center justify-between p-2.5 rounded-2xl bg-surface-container-low border border-surface-container">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[18px] text-secondary">
+                {docType === 'transfer_proof'
+                  ? 'payments'
+                  : docType === 'invoice'
+                  ? 'receipt_long'
+                  : 'shopping_bag'}
+              </span>
+              <span className="font-label-sm text-label-sm font-semibold text-on-surface">
+                {docType === 'transfer_proof'
+                  ? 'Bukti Transfer'
+                  : docType === 'invoice'
+                  ? 'Faktur / Tagihan'
+                  : docType === 'payment_screenshot'
+                  ? 'Pembayaran QRIS / Digital'
+                  : 'Struk Belanja'}
+              </span>
+            </div>
+            <select
+              value={docType}
+              onChange={(e) => setDocType(e.target.value as DocumentType)}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-surface-container-lowest border border-surface-container text-on-surface focus:ring-1 focus:ring-primary focus:outline-hidden"
+            >
+              <option value="receipt">Struk Belanja</option>
+              <option value="transfer_proof">Bukti Transfer</option>
+              <option value="invoice">Invoice / Faktur</option>
+              <option value="payment_screenshot">Pembayaran Digital</option>
+            </select>
+          </div>
+
+          {/* Form Fields - Conditionally customized based on documentType */}
           <div className="space-y-4">
-            {/* Nominal (IDR with Rp prefix and dot separator) */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                  Total Nominal (IDR)
-                </label>
-                {getFieldStatusBadge('amount', editableNominal)}
-              </div>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 font-headline-sm text-headline-sm font-bold text-on-surface-variant">
-                  Rp
-                </span>
-                <input
-                  id="receipt-nominal-input"
-                  ref={nominalInputRef}
-                  type="text"
-                  inputMode="numeric"
-                  placeholder="0"
-                  value={editableNominal}
-                  onChange={(e) => {
-                    const clean = e.target.value.replace(/\D/g, '');
-                    setEditableNominal(clean ? formatNumberIDR(parseInt(clean, 10)) : '');
-                  }}
-                  className="w-full min-h-[52px] pl-12 pr-4 rounded-xl bg-surface-container-low border border-surface-container font-headline-sm text-headline-sm font-bold text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden font-stat-tabular"
-                />
-              </div>
-            </div>
-
-            {/* Merchant / Nama Toko / Sumber */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                  Nama Toko / Merchant / Sumber
-                </label>
-                {getFieldStatusBadge('merchant', editableMerchant)}
-              </div>
-              <input
-                id="receipt-merchant-input"
-                type="text"
-                value={editableMerchant}
-                onChange={(e) => setEditableMerchant(e.target.value)}
-                placeholder="Contoh: Indomaret, Superindo, BCA Transfer, Starbucks"
-                className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
-              />
-            </div>
-
-            {/* Category & Payment Method */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                    Kategori
-                  </label>
-                  {getFieldStatusBadge('category', editableCategory)}
+            {/* === CASE 1: BUKTI TRANSFER (bank/wallet, amount, sender/recipient, reference, date) === */}
+            {docType === 'transfer_proof' ? (
+              <>
+                {/* Nominal */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Nominal Transfer (IDR)
+                    </label>
+                    {getFieldStatusBadge('amount', editableNominal)}
+                  </div>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 font-headline-sm text-headline-sm font-bold text-on-surface-variant">
+                      Rp
+                    </span>
+                    <input
+                      id="receipt-nominal-input"
+                      ref={nominalInputRef}
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={editableNominal}
+                      onChange={(e) => {
+                        const clean = e.target.value.replace(/\D/g, '');
+                        setEditableNominal(clean ? formatNumberIDR(parseInt(clean, 10)) : '');
+                      }}
+                      className="w-full min-h-[52px] pl-12 pr-4 rounded-xl bg-surface-container-low border border-surface-container font-headline-sm text-headline-sm font-bold text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden font-stat-tabular"
+                    />
+                  </div>
                 </div>
-                <select
-                  id="receipt-category-select"
-                  value={editableCategory}
-                  onChange={(e) => setEditableCategory(e.target.value)}
-                  className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
-                >
-                  {(editableType === 'expense' ? expenseCategories : incomeCategories).map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
 
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                    Metode Pembayaran
-                  </label>
-                  {getFieldStatusBadge('paymentMethod', editablePayment)}
+                {/* Bank / E-Wallet */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Bank / Dompet Digital
+                    </label>
+                    {getFieldStatusBadge('bankOrWallet', editableBankOrWallet || editablePayment)}
+                  </div>
+                  <input
+                    id="receipt-bank-input"
+                    type="text"
+                    value={editableBankOrWallet}
+                    onChange={(e) => {
+                      setEditableBankOrWallet(e.target.value);
+                      if (e.target.value) setEditablePayment(`Transfer ${e.target.value}`);
+                    }}
+                    placeholder="Contoh: BCA, Mandiri, BRI, GoPay, DANA, Flip"
+                    className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                  />
                 </div>
-                <select
-                  id="receipt-payment-select"
-                  value={editablePayment}
-                  onChange={(e) => setEditablePayment(e.target.value)}
-                  className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
-                >
-                  {paymentMethods.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
 
-            {/* Date & Time */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                    Tanggal
-                  </label>
-                  {getFieldStatusBadge('date', editableDate)}
-                </div>
-                <input
-                  id="receipt-date-input"
-                  type="date"
-                  value={editableDate}
-                  onChange={(e) => setEditableDate(e.target.value)}
-                  className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                    Waktu
-                  </label>
-                  {getFieldStatusBadge('time', editableTime)}
-                </div>
-                <input
-                  id="receipt-time-input"
-                  type="time"
-                  value={editableTime}
-                  onChange={(e) => setEditableTime(e.target.value)}
-                  className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
-                />
-              </div>
-            </div>
+                {/* Sender & Recipient */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Pengirim (Opsional)
+                      </label>
+                      {getFieldStatusBadge('sender', editableSender)}
+                    </div>
+                    <input
+                      id="receipt-sender-input"
+                      type="text"
+                      value={editableSender}
+                      onChange={(e) => setEditableSender(e.target.value)}
+                      placeholder="Nama / Rekening Pengirim"
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
 
-            {/* Description & Reference No */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                  Deskripsi Transaksi
-                </label>
-                <input
-                  id="receipt-description-input"
-                  type="text"
-                  value={editableDescription}
-                  onChange={(e) => setEditableDescription(e.target.value)}
-                  placeholder="Contoh: Belanja mingguan, Makan siang"
-                  className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-                  Nomor Referensi (Opsional)
-                </label>
-                <input
-                  id="receipt-ref-input"
-                  type="text"
-                  value={editableRefNo}
-                  onChange={(e) => setEditableRefNo(e.target.value)}
-                  placeholder="Contoh: 2026090412345 / Trace No"
-                  className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
-                />
-              </div>
-            </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Penerima (Tujuan)
+                      </label>
+                      {getFieldStatusBadge('recipient', editableRecipient || editableMerchant)}
+                    </div>
+                    <input
+                      id="receipt-recipient-input"
+                      type="text"
+                      value={editableRecipient || editableMerchant}
+                      onChange={(e) => {
+                        setEditableRecipient(e.target.value);
+                        setEditableMerchant(e.target.value);
+                      }}
+                      placeholder="Nama Penerima / No. Rekening"
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Reference Number */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Nomor Referensi / Ref ID
+                    </label>
+                    {getFieldStatusBadge('referenceNumber', editableRefNo)}
+                  </div>
+                  <input
+                    id="receipt-ref-input"
+                    type="text"
+                    value={editableRefNo}
+                    onChange={(e) => setEditableRefNo(e.target.value)}
+                    placeholder="Contoh: 2026090412345 / Ref ID Transaksi"
+                    className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Date & Time */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Tanggal Transfer
+                      </label>
+                      {getFieldStatusBadge('date', editableDate)}
+                    </div>
+                    <input
+                      id="receipt-date-input"
+                      type="date"
+                      value={editableDate}
+                      onChange={(e) => setEditableDate(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Waktu
+                      </label>
+                      {getFieldStatusBadge('time', editableTime)}
+                    </div>
+                    <input
+                      id="receipt-time-input"
+                      type="time"
+                      value={editableTime}
+                      onChange={(e) => setEditableTime(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Category & Description */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Kategori Transaksi
+                    </label>
+                    <select
+                      id="receipt-category-select"
+                      value={editableCategory}
+                      onChange={(e) => setEditableCategory(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    >
+                      {(editableType === 'expense' ? expenseCategories : incomeCategories).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Berita / Keterangan Transfer
+                    </label>
+                    <input
+                      id="receipt-description-input"
+                      type="text"
+                      value={editableDescription}
+                      onChange={(e) => setEditableDescription(e.target.value)}
+                      placeholder="Contoh: Bayar sewa, Belanja bulanan, Gaji"
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+              </>
+            ) : docType === 'invoice' ? (
+              /* === CASE 2: INVOICE (merchant, invoice number, amount, due date) === */
+              <>
+                {/* Vendor / Merchant */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Penerbit / Vendor Tagihan
+                    </label>
+                    {getFieldStatusBadge('merchant', editableMerchant)}
+                  </div>
+                  <input
+                    id="receipt-merchant-input"
+                    type="text"
+                    value={editableMerchant}
+                    onChange={(e) => setEditableMerchant(e.target.value)}
+                    placeholder="Contoh: PLN, PDAM, Indihome, PT Vendor Sejahtera"
+                    className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Invoice Number */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Nomor Invoice / Faktur
+                    </label>
+                    {getFieldStatusBadge('invoiceNumber', editableInvoiceNumber || editableRefNo)}
+                  </div>
+                  <input
+                    id="receipt-invoice-input"
+                    type="text"
+                    value={editableInvoiceNumber || editableRefNo}
+                    onChange={(e) => {
+                      setEditableInvoiceNumber(e.target.value);
+                      setEditableRefNo(e.target.value);
+                    }}
+                    placeholder="Contoh: INV/2026/09/001"
+                    className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Total Tagihan (Amount) */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Total Nominal Tagihan (IDR)
+                    </label>
+                    {getFieldStatusBadge('amount', editableNominal)}
+                  </div>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 font-headline-sm text-headline-sm font-bold text-on-surface-variant">
+                      Rp
+                    </span>
+                    <input
+                      id="receipt-nominal-input"
+                      ref={nominalInputRef}
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={editableNominal}
+                      onChange={(e) => {
+                        const clean = e.target.value.replace(/\D/g, '');
+                        setEditableNominal(clean ? formatNumberIDR(parseInt(clean, 10)) : '');
+                      }}
+                      className="w-full min-h-[52px] pl-12 pr-4 rounded-xl bg-surface-container-low border border-surface-container font-headline-sm text-headline-sm font-bold text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden font-stat-tabular"
+                    />
+                  </div>
+                </div>
+
+                {/* Due Date & Invoice Date */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Tanggal Jatuh Tempo
+                      </label>
+                      {getFieldStatusBadge('dueDate', editableDueDate)}
+                    </div>
+                    <input
+                      id="receipt-duedate-input"
+                      type="date"
+                      value={editableDueDate}
+                      onChange={(e) => setEditableDueDate(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Tanggal Faktur Terbit
+                      </label>
+                      {getFieldStatusBadge('date', editableDate)}
+                    </div>
+                    <input
+                      id="receipt-date-input"
+                      type="date"
+                      value={editableDate}
+                      onChange={(e) => setEditableDate(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Category & Description */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Kategori
+                    </label>
+                    <select
+                      id="receipt-category-select"
+                      value={editableCategory}
+                      onChange={(e) => setEditableCategory(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    >
+                      {(editableType === 'expense' ? expenseCategories : incomeCategories).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Deskripsi Layanan
+                    </label>
+                    <input
+                      id="receipt-description-input"
+                      type="text"
+                      value={editableDescription}
+                      onChange={(e) => setEditableDescription(e.target.value)}
+                      placeholder="Contoh: Tagihan Internet Kantor Bulan September"
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* === CASE 3: STRUK BELANJA (merchant, amount, date, payment method, category) === */
+              <>
+                {/* Merchant */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Nama Toko / Merchant
+                    </label>
+                    {getFieldStatusBadge('merchant', editableMerchant)}
+                  </div>
+                  <input
+                    id="receipt-merchant-input"
+                    type="text"
+                    value={editableMerchant}
+                    onChange={(e) => setEditableMerchant(e.target.value)}
+                    placeholder="Contoh: Indomaret, Alfamart, SPBU Pertamina, Starbucks"
+                    className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Amount (Total IDR) */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Total Nominal (IDR)
+                    </label>
+                    {getFieldStatusBadge('amount', editableNominal)}
+                  </div>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 font-headline-sm text-headline-sm font-bold text-on-surface-variant">
+                      Rp
+                    </span>
+                    <input
+                      id="receipt-nominal-input"
+                      ref={nominalInputRef}
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={editableNominal}
+                      onChange={(e) => {
+                        const clean = e.target.value.replace(/\D/g, '');
+                        setEditableNominal(clean ? formatNumberIDR(parseInt(clean, 10)) : '');
+                      }}
+                      className="w-full min-h-[52px] pl-12 pr-4 rounded-xl bg-surface-container-low border border-surface-container font-headline-sm text-headline-sm font-bold text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden font-stat-tabular"
+                    />
+                  </div>
+                </div>
+
+                {/* Date & Time */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Tanggal
+                      </label>
+                      {getFieldStatusBadge('date', editableDate)}
+                    </div>
+                    <input
+                      id="receipt-date-input"
+                      type="date"
+                      value={editableDate}
+                      onChange={(e) => setEditableDate(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Waktu
+                      </label>
+                      {getFieldStatusBadge('time', editableTime)}
+                    </div>
+                    <input
+                      id="receipt-time-input"
+                      type="time"
+                      value={editableTime}
+                      onChange={(e) => setEditableTime(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Category & Payment Method */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Kategori
+                      </label>
+                      {getFieldStatusBadge('category', editableCategory)}
+                    </div>
+                    <select
+                      id="receipt-category-select"
+                      value={editableCategory}
+                      onChange={(e) => setEditableCategory(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    >
+                      {(editableType === 'expense' ? expenseCategories : incomeCategories).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                        Metode Pembayaran
+                      </label>
+                      {getFieldStatusBadge('paymentMethod', editablePayment)}
+                    </div>
+                    <select
+                      id="receipt-payment-select"
+                      value={editablePayment}
+                      onChange={(e) => setEditablePayment(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    >
+                      {paymentMethods.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Description & Reference No */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Deskripsi Transaksi (Opsional)
+                    </label>
+                    <input
+                      id="receipt-description-input"
+                      type="text"
+                      value={editableDescription}
+                      onChange={(e) => setEditableDescription(e.target.value)}
+                      placeholder="Contoh: Belanja mingguan, Makan siang"
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+                      Nomor Bon / Ref (Opsional)
+                    </label>
+                    <input
+                      id="receipt-ref-input"
+                      type="text"
+                      value={editableRefNo}
+                      onChange={(e) => setEditableRefNo(e.target.value)}
+                      placeholder="Contoh: No. Bon / POS ID"
+                      className="w-full min-h-[44px] px-3 rounded-xl bg-surface-container-low border border-surface-container font-body-md text-body-md text-on-surface focus:ring-2 focus:ring-primary focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Scanned Items Accordion if any */}
             {reviewData.items && reviewData.items.length > 0 && (
