@@ -155,18 +155,34 @@ export const ScanView: React.FC = () => {
       const result = await response.json();
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Gagal memindai struk dengan AI Vision.');
+        const errorMsg = result?.error || 'Gagal memindai struk dengan AI Vision.';
+        const errObj = new Error(errorMsg);
+        (errObj as any).errorCode = result?.errorCode || 'API_ERROR';
+        throw errObj;
       }
 
       // 3. Populate review fields from AI
       const extracted: ReceiptScanResult = result.data;
       setReviewData(extracted);
-      setIsManualFallback(false);
-      setEditableType(extracted.type || 'expense');
+
+      // Practical Confidence Check (Requirement 7):
+      // A scan is successful when useful data (amount, merchant/source, date, or reference) is detected.
+      const isLowConfidence =
+        extracted.confidence === 'low' &&
+        !extracted.amount &&
+        !extracted.merchant &&
+        !extracted.referenceNumber;
+
+      const txType =
+        extracted.transactionType === 'income' || extracted.type === 'income'
+          ? 'income'
+          : 'expense';
+
+      setEditableType(txType);
       setEditableNominal(extracted.amount ? formatNumberIDR(extracted.amount) : '');
       setEditableMerchant(extracted.merchant || '');
       setEditableCategory(
-        extracted.category || (extracted.type === 'income' ? 'Lainnya' : 'Belanja Harian')
+        extracted.category || (txType === 'income' ? 'Lainnya' : 'Belanja Harian')
       );
       setEditablePayment(
         extracted.paymentMethod || (source === 'transfer' ? 'Transfer BCA' : 'QRIS BCA')
@@ -174,44 +190,66 @@ export const ScanView: React.FC = () => {
       setEditableDate(extracted.date || getCurrentDateStr());
       setEditableTime(extracted.time || getCurrentTimeStr());
       setEditableDescription(extracted.description || '');
-      setEditableRefNo(extracted.referenceNo || '');
+      setEditableRefNo(extracted.referenceNumber || extracted.referenceNo || '');
       setEditableNotes(extracted.notes || '');
 
-      // Check for duplicate transaction in database
-      const duplicate = checkDuplicateReceipt(
-        extracted.amount,
-        extracted.date,
-        extracted.merchant
-      );
-      if (duplicate) {
-        setDuplicateWarning(duplicate);
+      if (isLowConfidence) {
+        setIsManualFallback(true);
+        setScanError('Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.');
+        showToast('Gambar berhasil dimuat. Silakan lengkapi data transaksi.');
+      } else {
+        setIsManualFallback(false);
+        setScanError(null);
+        showToast('Bukti transaksi berhasil dipindai oleh AI Vision.');
       }
 
-      showToast('Struk berhasil dipindai oleh AI Vision.');
+      // Check for duplicate transaction in database
+      if (extracted.amount) {
+        const duplicate = checkDuplicateReceipt(
+          extracted.amount,
+          extracted.date || getCurrentDateStr(),
+          extracted.merchant || ''
+        );
+        if (duplicate) {
+          setDuplicateWarning(duplicate);
+        }
+      }
     } catch (err: any) {
       console.error('Scan error:', err);
-      // Requirement 8: Manual Fallback
-      // "If AI/OCR fails:
-      //  Do not block the workflow.
-      //  Keep the uploaded image attached.
-      //  Open manual transaction entry.
-      //  Show: 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.'
-      //  Provide: Isi Manual, Coba Scan Lagi, Pilih Gambar Lain"
+      // Requirement 8: Production Error Handling & Manual Fallback
+      // Differentiate between technical AI errors, network, and unreadable images.
+      let friendlyError = 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.';
+      const code = err?.errorCode;
+      const message = String(err?.message || '');
+
+      if (code === 'MODEL_OVERLOADED' || code === 'MODEL_UNAVAILABLE' || code === 'API_KEY_MISSING') {
+        friendlyError = err.message;
+      } else if (code === 'UNSUPPORTED_MIME' || code === 'INVALID_PAYLOAD') {
+        friendlyError = err.message;
+      } else if (message.includes('fetch') || message.includes('network') || message.includes('Failed to fetch')) {
+        friendlyError = 'Koneksi jaringan terputus saat memindai gambar. Anda dapat menginput transaksi secara manual.';
+      } else if (err.message && !err.message.includes('Gagal memindai')) {
+        friendlyError = err.message;
+      }
+
       const fallbackData: ReceiptScanResult = {
-        type: source === 'transfer' ? 'expense' : 'expense',
-        amount: 0,
+        transactionType: source === 'transfer' ? 'expense' : 'expense',
+        type: 'expense',
+        amount: null,
         date: getCurrentDateStr(),
         time: getCurrentTimeStr(),
         merchant: '',
         category: 'Belanja Harian',
         paymentMethod: source === 'transfer' ? 'Transfer BCA' : 'Tunai',
+        referenceNumber: '',
         referenceNo: '',
         description: '',
         notes: '',
         items: [],
+        confidence: 'low',
         isUncertain: true,
         uncertainFields: ['amount', 'merchant', 'category', 'paymentMethod'],
-        detectionSummary: 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.',
+        detectionSummary: friendlyError,
       };
 
       setReviewData(fallbackData);
@@ -226,8 +264,8 @@ export const ScanView: React.FC = () => {
       setEditableDescription('');
       setEditableRefNo('');
       setEditableNotes('');
-      setScanError('Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.');
-      showToast('Gambar berhasil dimuat. Silakan lengkapi data transaksi.');
+      setScanError(friendlyError);
+      showToast(friendlyError);
     } finally {
       setIsScanning(false);
     }
@@ -256,31 +294,58 @@ export const ScanView: React.FC = () => {
 
       const result = await response.json();
       if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Gagal membaca struk.');
+        const errObj = new Error(result?.error || 'Gagal membaca struk.');
+        (errObj as any).errorCode = result?.errorCode || 'API_ERROR';
+        throw errObj;
       }
 
       const extracted: ReceiptScanResult = result.data;
       setReviewData(extracted);
-      setIsManualFallback(false);
-      setEditableType(extracted.type || 'expense');
+
+      const isLowConfidence =
+        extracted.confidence === 'low' &&
+        !extracted.amount &&
+        !extracted.merchant &&
+        !extracted.referenceNumber;
+
+      const txType =
+        extracted.transactionType === 'income' || extracted.type === 'income'
+          ? 'income'
+          : 'expense';
+
+      setEditableType(txType);
       setEditableNominal(extracted.amount ? formatNumberIDR(extracted.amount) : '');
       setEditableMerchant(extracted.merchant || '');
       setEditableCategory(
-        extracted.category || (extracted.type === 'income' ? 'Lainnya' : 'Belanja Harian')
+        extracted.category || (txType === 'income' ? 'Lainnya' : 'Belanja Harian')
       );
       setEditablePayment(extracted.paymentMethod || 'QRIS BCA');
       setEditableDate(extracted.date || getCurrentDateStr());
       setEditableTime(extracted.time || getCurrentTimeStr());
       setEditableDescription(extracted.description || '');
-      setEditableRefNo(extracted.referenceNo || '');
+      setEditableRefNo(extracted.referenceNumber || extracted.referenceNo || '');
       setEditableNotes(extracted.notes || '');
 
-      showToast('Struk berhasil dipindai oleh AI Vision.');
+      if (isLowConfidence) {
+        setIsManualFallback(true);
+        setScanError('Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.');
+        showToast('Gambar berhasil dimuat. Silakan lengkapi data transaksi.');
+      } else {
+        setIsManualFallback(false);
+        setScanError(null);
+        showToast('Bukti transaksi berhasil dipindai oleh AI Vision.');
+      }
     } catch (err: any) {
       console.error('Rescan error:', err);
+      let friendlyError = 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.';
+      if (err?.errorCode === 'MODEL_OVERLOADED' || err?.errorCode === 'MODEL_UNAVAILABLE') {
+        friendlyError = err.message;
+      } else if (err?.message) {
+        friendlyError = err.message;
+      }
       setIsManualFallback(true);
-      setScanError('Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.');
-      showToast('Data belum terbaca dengan yakin. Silakan lengkapi manual.');
+      setScanError(friendlyError);
+      showToast(friendlyError);
     } finally {
       setIsScanning(false);
     }

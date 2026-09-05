@@ -44,9 +44,10 @@ async function startServer() {
       const { imageBase64, mimeType = 'image/jpeg' } = req.body;
 
       if (!imageBase64) {
-        return res.status(400).json({
+        return res.status(200).json({
           success: false,
-          error: 'Gambar struk tidak ditemukan. Harap unggah gambar terlebih dahulu.',
+          errorCode: 'INVALID_PAYLOAD',
+          error: 'Gambar struk tidak ditemukan atau kosong. Harap pilih/ambil foto kembali.',
         });
       }
 
@@ -54,110 +55,110 @@ async function startServer() {
       const cleanBase64 = String(imageBase64)
         .replace(/^data:[^;]+;base64,/, '')
         .replace(/\s/g, '');
+
+      if (!cleanBase64 || cleanBase64.length < 100) {
+        return res.status(200).json({
+          success: false,
+          errorCode: 'INVALID_PAYLOAD',
+          error: 'Data gambar tidak valid atau terlalu kecil. Harap ambil foto yang lebih jelas.',
+        });
+      }
+
       const cleanMime =
         typeof mimeType === 'string' && mimeType.startsWith('image/')
-          ? mimeType
+          ? mimeType.toLowerCase()
           : 'image/jpeg';
+
+      const supportedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
+      if (!supportedMimes.includes(cleanMime)) {
+        return res.status(200).json({
+          success: false,
+          errorCode: 'UNSUPPORTED_MIME',
+          error: `Format gambar (${cleanMime}) tidak didukung. Harap gunakan foto JPG, PNG, atau WEBP.`,
+        });
+      }
 
       const ai = getAiClient();
       if (!ai) {
-        return res.status(503).json({
+        return res.status(200).json({
           success: false,
-          error: 'Layanan Gemini Vision belum terhubung (GEMINI_API_KEY tidak ditemukan). Anda dapat mengisi data struk secara manual.',
+          errorCode: 'API_KEY_MISSING',
+          error: 'Layanan AI Vision belum terhubung (GEMINI_API_KEY tidak ditemukan). Anda dapat mengisi data transaksi secara manual.',
         });
       }
 
       const prompt = `Anda adalah asisten AI ahli OCR dan analisis dokumen keuangan untuk Indonesia.
-Tugas Anda adalah membaca dan menganalisis gambar struk belanja, tiket kasir, bukti QRIS, atau bukti transfer perbankan/e-wallet.
+Tugas Anda adalah membaca dan mengekstrak data dari gambar struk belanja, tiket kasir, bukti QRIS, atau bukti transfer perbankan/e-wallet.
 
-Aturan Deteksi Jenis Transaksi:
-1. Struk Toko / Merchant (Indomaret, Alfamart, Supermarket, Restoran, Kafe, SPBU, Toko Retail, dll) -> type: 'expense'.
-2. Bukti Transfer Keluar / Pembayaran (Transfer Berhasil, Pembayaran Berhasil, Kirim Uang, QRIS Berhasil dari BCA, Mandiri, BRI, BNI, GoPay, OVO, ShopeePay, Dana, Flip, dll) -> type: 'expense'.
-3. Bukti Transfer Masuk / Penerimaan Dana (Transfer Masuk, Uang Diterima, Dana Masuk, Top Up Berhasil, Gaji Masuk) -> type: 'income'.
+Format kembalian HARUS berupa JSON murni tanpa markdown, dengan struktur PERSIS seperti ini:
+{
+  "transactionType": "income | expense | unknown",
+  "amount": number | null,
+  "date": "YYYY-MM-DD" | null,
+  "time": "HH:mm" | null,
+  "merchant": string | null,
+  "paymentMethod": string | null,
+  "referenceNumber": string | null,
+  "description": string | null,
+  "category": string | null,
+  "confidence": "high | medium | low"
+}
 
-Format Ekstraksi Data JSON:
-- type: 'expense' atau 'income'
-- amount: angka bulat positif dalam Rupiah (integer, contoh: 25000 atau 1250000. JANGAN gunakan string atau titik/koma). Ambil total pembayaran akhir / total transfer yang sah.
-- date: tanggal transaksi format YYYY-MM-DD (jika tahun tidak tertera, gunakan 2026).
-- time: waktu transaksi format HH:mm (24 jam, contoh: "14:35").
-- merchant: nama toko, merchant, penerima transfer, atau pengirim transfer.
-- category: saran kategori yang tepat:
-  * Untuk expense: 'Belanja Harian', 'Kuliner', 'Transportasi', 'Tagihan & Langganan', 'Hiburan', 'Kesehatan', 'Pendidikan', 'Lainnya'
-  * Untuk income: 'Karir & Gaji', 'Bisnis', 'Investasi', 'Hadiah & Bonus', 'Penjualan Aset', 'Lainnya'
-- paymentMethod: metode pembayaran jika terdeteksi (contoh: 'QRIS BCA', 'Transfer BCA', 'Debit BCA', 'Bank Mandiri', 'GoPay', 'ShopeePay', 'OVO', 'Tunai', 'Kartu Kredit', dll).
-- referenceNo: nomor referensi / No. Transaksi / Ref ID / Trace Number jika terlihat jelas pada bukti transfer atau struk.
-- description: keterangan singkat transaksi (contoh: 'Pembayaran belanja Indomaret', 'Transfer ke Budi Santoso', dll).
-- notes: catatan rincian belanja atau keterangan transfer.
-- items: rincian barang/jasa jika terbaca (array of { name: string, price: number, qty?: number }).
-- isUncertain: boolean true jika gambar buram, nilai terpotong, atau tidak terbaca jelas.
-- uncertainFields: array field yang kurang jelas atau tidak dapat dipastikan (contoh: ['amount', 'paymentMethod']).
-- detectionSummary: ringkasan ramah dalam bahasa Indonesia tentang apa yang berhasil dibaca.
+ATURAN STRUK BELANJA:
+- merchant: Nama toko/merchant (contoh: Indomaret, Alfamart, SPBU Pertamina, Toko, Restoran, Kafe, dll).
+- amount: Cari dan prioritaskan TOTAL, GRAND TOTAL, TOTAL BAYAR, TOTAL PEMBAYARAN, atau JUMLAH BAYAR.
+  PENTING: Jangan tertukar dengan Subtotal, Pajak/PPN, Nominal Tunai yang diserahkan pembeli, atau Uang Kembalian.
+  Konversi format angka Indonesia menjadi angka bulat (integer), contoh:
+  "Rp 25.000" -> 25000
+  "25.000" -> 25000
+  "Rp25,000" -> 25000
+  "1.250.000" -> 1250000
+  "IDR 50,000" -> 50000
+- date: Tanggal transaksi format YYYY-MM-DD (jika tahun tidak tertera, gunakan 2026).
+- time: Waktu transaksi format HH:mm (24 jam, contoh: "14:35").
+- category: Kategori yang sesuai: 'Belanja Harian', 'Kuliner', 'Transportasi', 'Tagihan & Langganan', 'Hiburan', 'Kesehatan', 'Pendidikan', atau 'Lainnya'.
+- paymentMethod: Metode pembayaran jika tertera (contoh: 'Tunai', 'QRIS BCA', 'Debit Mandiri', 'GoPay', 'ShopeePay', dll).
+- referenceNumber: Nomor struk / No. Transaksi / Bon ID jika tertera.
+- transactionType: 'expense'.
 
-PENTING TENTANG KEAMANAN KEUANGAN:
-Jangan pernah mengarang angka jika tidak yakin. Jika nominal atau nama toko meragukan, tandai di uncertainFields.`;
+ATURAN BUKTI TRANSFER / MUTASI:
+- amount: Nominal dana yang ditransfer atau diterima (dalam Rupiah bulat).
+- transactionType: Tentukan dengan teliti:
+  * Jika bukti transfer keluar / kirim dana / pembayaran sukses -> "expense".
+  * Jika bukti transfer masuk / dana diterima / top up masuk -> "income".
+  * Jika arah transaksi tidak dapat dipastikan dari gambar -> "unknown" (JANGAN mengarang).
+- merchant: Nama penerima atau nama pengirim transfer atau nama bank/merchant.
+- paymentMethod: Sumber bank/e-wallet (contoh: 'Transfer BCA', 'Bank Mandiri', 'BRI', 'BNI', 'GoPay', 'Dana', 'OVO', 'ShopeePay', dll).
+- referenceNumber: Nomor referensi / No. Referensi / Ref ID / ID Transaksi.
+- date: Tanggal transfer format YYYY-MM-DD.
+- time: Jam transfer format HH:mm.
+- description: Keterangan atau catatan transfer jika ada.
 
-      let response;
-      const primaryModel = 'gemini-3.8-flash';
-      try {
-        response = await ai.models.generateContent({
-          model: primaryModel,
-          contents: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: cleanMime,
-                  data: cleanBase64,
-                },
-              },
-              {
-                text: prompt,
-              },
-            ],
-          },
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                type: { type: Type.STRING, enum: ['expense', 'income'] },
-                amount: { type: Type.NUMBER },
-                date: { type: Type.STRING },
-                time: { type: Type.STRING },
-                merchant: { type: Type.STRING },
-                category: { type: Type.STRING },
-                paymentMethod: { type: Type.STRING },
-                referenceNo: { type: Type.STRING },
-                description: { type: Type.STRING },
-                notes: { type: Type.STRING },
-                items: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      name: { type: Type.STRING },
-                      price: { type: Type.NUMBER },
-                      qty: { type: Type.NUMBER },
-                    },
-                    required: ['name', 'price'],
-                  },
-                },
-                isUncertain: { type: Type.BOOLEAN },
-                uncertainFields: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
-                detectionSummary: { type: Type.STRING },
-              },
-              required: ['type', 'amount', 'date', 'merchant', 'category'],
-            },
-          },
-        });
-      } catch (geminiError: any) {
-        const msg = String(geminiError?.message || '');
-        if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('not found')) {
-          console.warn(`Model ${primaryModel} returned 404, falling back to gemini-2.5-flash...`);
-          response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+ATURAN CONFIDENCE & KELENGKAPAN:
+- Jika suatu kolom tidak terdeteksi pada gambar, isi dengan null. JANGAN membatalkan pemindaian hanya karena satu field tidak ada.
+- "high": nominal (amount) + nama merchant/sumber + tanggal terdeteksi jelas.
+- "medium": nominal (amount) terdeteksi ditambah minimal satu field lain (merchant, metode, tanggal, atau nomor referensi).
+- "low": tidak ada data transaksi yang berguna terbaca.
+
+HANYA kembalikan JSON murni, tanpa teks pembuka, dan tanpa format markdown.`;
+
+      // Multimodal Candidate Models list (active in Google AI Studio)
+      const CANDIDATE_MODELS = [
+        'gemini-3.1-flash-lite',
+        'gemini-flash-latest',
+        'gemini-3.8-flash',
+        'gemini-3.6-flash',
+        'gemini-3.7-flash',
+      ];
+
+      let responseText: string | null = null;
+      let usedModel: string | null = null;
+      let lastModelError: any = null;
+
+      for (const modelName of CANDIDATE_MODELS) {
+        try {
+          const result = await ai.models.generateContent({
+            model: modelName,
             contents: {
               parts: [
                 {
@@ -173,63 +174,204 @@ Jangan pernah mengarang angka jika tidak yakin. Jika nominal atau nama toko mera
             },
             config: {
               responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  type: { type: Type.STRING, enum: ['expense', 'income'] },
-                  amount: { type: Type.NUMBER },
-                  date: { type: Type.STRING },
-                  time: { type: Type.STRING },
-                  merchant: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                  paymentMethod: { type: Type.STRING },
-                  referenceNo: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  notes: { type: Type.STRING },
-                  items: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        name: { type: Type.STRING },
-                        price: { type: Type.NUMBER },
-                        qty: { type: Type.NUMBER },
-                      },
-                      required: ['name', 'price'],
-                    },
-                  },
-                  isUncertain: { type: Type.BOOLEAN },
-                  uncertainFields: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                  detectionSummary: { type: Type.STRING },
-                },
-                required: ['type', 'amount', 'date', 'merchant', 'category'],
-              },
             },
           });
-        } else {
-          throw geminiError;
+
+          if (result.text && result.text.trim()) {
+            responseText = result.text.trim();
+            usedModel = modelName;
+            break;
+          }
+        } catch (modelErr: any) {
+          lastModelError = modelErr;
+          console.warn(`Model ${modelName} encountered error:`, modelErr?.message || modelErr);
+          // Try next candidate model
         }
       }
 
-      const text = response.text;
-      if (!text) {
-        throw new Error('Model tidak mengembalikan hasil teks.');
+      if (!responseText) {
+        console.error('All multimodal candidate models failed. Last error:', lastModelError);
+        const errMsg = String(lastModelError?.message || '');
+
+        let errorCode = 'MODEL_UNAVAILABLE';
+        let friendlyMessage = 'Layanan AI Vision sedang sibuk. Silakan coba sesaat lagi atau gunakan input manual.';
+
+        if (errMsg.includes('404') || errMsg.includes('NOT_FOUND')) {
+          errorCode = 'MODEL_NOT_FOUND';
+          friendlyMessage = 'Model AI Vision tidak tersedia saat ini. Silakan input manual atau coba lagi nanti.';
+        } else if (errMsg.includes('503') || errMsg.includes('UNAVAILABLE') || errMsg.includes('high demand')) {
+          errorCode = 'MODEL_OVERLOADED';
+          friendlyMessage = 'Layanan AI Vision sedang mengalami lonjakan beban. Silakan coba beberapa detik lagi atau isi manual.';
+        } else if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+          errorCode = 'RATE_LIMIT';
+          friendlyMessage = 'Batas kuota pemindaian tercapai sementara. Silakan coba kembali atau input manual.';
+        } else if (errMsg.includes('ENOTFOUND') || errMsg.includes('ECONNREFUSED') || errMsg.includes('fetch failed')) {
+          errorCode = 'NETWORK_ERROR';
+          friendlyMessage = 'Koneksi ke server AI Vision terputus. Pastikan koneksi internet aktif.';
+        }
+
+        return res.status(200).json({
+          success: false,
+          errorCode,
+          error: friendlyMessage,
+          technicalDetails: process.env.NODE_ENV !== 'production' ? errMsg : undefined,
+        });
       }
 
-      const parsedData = JSON.parse(text);
+      // Safe JSON parsing & cleaning
+      let parsed: any = null;
+      try {
+        const cleanJsonStr = responseText
+          .replace(/^```json\s*/i, '')
+          .replace(/^```\s*/i, '')
+          .replace(/```\s*$/i, '')
+          .trim();
+        parsed = JSON.parse(cleanJsonStr);
+      } catch (jsonErr) {
+        console.warn('Direct JSON parse failed, attempting regex extraction:', jsonErr);
+        const match = responseText.match(/\{[\s\S]*\}/);
+        if (match) {
+          parsed = JSON.parse(match[0]);
+        } else {
+          return res.status(200).json({
+            success: false,
+            errorCode: 'INVALID_AI_RESPONSE',
+            error: 'Format data dari AI tidak valid. Silakan coba scan ulang atau isi data secara manual.',
+          });
+        }
+      }
+
+      // Compute practical confidence rules (Requirement 7)
+      const rawAmount = parsed.amount;
+      const numericAmount =
+        typeof rawAmount === 'number' && !isNaN(rawAmount) && rawAmount > 0
+          ? Math.round(rawAmount)
+          : null;
+
+      const merchantStr =
+        typeof parsed.merchant === 'string' && parsed.merchant.trim()
+          ? parsed.merchant.trim()
+          : null;
+
+      const dateStr =
+        typeof parsed.date === 'string' && parsed.date.trim()
+          ? parsed.date.trim()
+          : null;
+
+      const timeStr =
+        typeof parsed.time === 'string' && parsed.time.trim()
+          ? parsed.time.trim()
+          : null;
+
+      const refNoStr =
+        typeof parsed.referenceNumber === 'string' && parsed.referenceNumber.trim()
+          ? parsed.referenceNumber.trim()
+          : null;
+
+      const paymentStr =
+        typeof parsed.paymentMethod === 'string' && parsed.paymentMethod.trim()
+          ? parsed.paymentMethod.trim()
+          : null;
+
+      const descStr =
+        typeof parsed.description === 'string' && parsed.description.trim()
+          ? parsed.description.trim()
+          : null;
+
+      const categoryStr =
+        typeof parsed.category === 'string' && parsed.category.trim()
+          ? parsed.category.trim()
+          : null;
+
+      // Determine transaction type
+      let txType: 'expense' | 'income' = 'expense';
+      let rawTxType: 'income' | 'expense' | 'unknown' = 'unknown';
+      if (parsed.transactionType === 'income' || parsed.type === 'income') {
+        txType = 'income';
+        rawTxType = 'income';
+      } else if (parsed.transactionType === 'expense' || parsed.type === 'expense') {
+        txType = 'expense';
+        rawTxType = 'expense';
+      } else {
+        txType = 'expense';
+        rawTxType = 'unknown';
+      }
+
+      // Confidence Evaluation
+      const hasAmount = numericAmount !== null && numericAmount > 0;
+      const hasMerchant = merchantStr !== null;
+      const hasDate = dateStr !== null;
+      const hasRef = refNoStr !== null;
+      const hasPayment = paymentStr !== null;
+
+      let confidence: 'high' | 'medium' | 'low' = 'low';
+      if (hasAmount && (hasMerchant || hasPayment) && hasDate) {
+        confidence = 'high';
+      } else if (hasAmount && (hasMerchant || hasPayment || hasDate || hasRef)) {
+        confidence = 'medium';
+      } else if (hasAmount || hasMerchant || hasRef) {
+        confidence = 'medium';
+      } else {
+        confidence = 'low';
+      }
+
+      // If model itself provided high/medium/low, respect it if consistent
+      if (['high', 'medium', 'low'].includes(parsed.confidence)) {
+        if (confidence !== 'low') {
+          confidence = parsed.confidence;
+        }
+      }
+
+      const uncertainList: string[] = [];
+      if (!hasAmount) uncertainList.push('amount');
+      if (!hasMerchant) uncertainList.push('merchant');
+      if (!hasDate) uncertainList.push('date');
+      if (!hasPayment) uncertainList.push('paymentMethod');
+
+      const isUncertain = confidence === 'low';
+
+      const summaryText =
+        confidence === 'high'
+          ? `Berhasil membaca: ${merchantStr || 'Merchant'}, ${numericAmount ? 'Rp ' + numericAmount.toLocaleString('id-ID') : ''} (${dateStr || 'Hari ini'})`
+          : confidence === 'medium'
+          ? `Data terdeteksi sebagian: ${numericAmount ? 'Rp ' + numericAmount.toLocaleString('id-ID') : merchantStr || 'Struk/Transfer'}. Silakan periksa kembali.`
+          : 'Gambar berhasil dimuat, tetapi data transaksi belum terbaca dengan yakin.';
+
+      const finalData = {
+        // Requested format fields
+        transactionType: rawTxType,
+        amount: numericAmount,
+        date: dateStr,
+        time: timeStr,
+        merchant: merchantStr,
+        paymentMethod: paymentStr,
+        referenceNumber: refNoStr,
+        description: descStr,
+        category: categoryStr,
+        confidence,
+
+        // Backwards-compatible fields for existing UI components
+        type: txType,
+        referenceNo: refNoStr || '',
+        notes: descStr || '',
+        isUncertain,
+        uncertainFields: uncertainList,
+        detectionSummary: summaryText,
+        items: Array.isArray(parsed.items) ? parsed.items : [],
+      };
+
       return res.json({
         success: true,
         source: 'gemini-ai',
-        data: parsedData,
+        model: usedModel,
+        data: finalData,
       });
     } catch (error: any) {
-      console.error('Error scanning receipt:', error);
-      return res.status(500).json({
+      console.error('Unhandled error in /api/scan-receipt:', error);
+      return res.status(200).json({
         success: false,
-        error: error.message || 'Gagal memindai struk dengan AI. Silakan coba lagi atau input manual.',
+        errorCode: 'SERVER_ERROR',
+        error: error.message || 'Gagal memindai struk dengan AI Vision. Silakan coba lagi atau input manual.',
       });
     }
   });

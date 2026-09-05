@@ -80,20 +80,23 @@ export interface ScannedReceiptRecord {
 }
 
 export interface ReceiptScanResult {
+  transactionType?: 'income' | 'expense' | 'unknown';
   type: TransactionType;
-  amount: number;
-  date: string;
-  time: string;
-  merchant: string;
-  category: string;
-  paymentMethod: string;
+  amount: number | null;
+  date: string | null;
+  time: string | null;
+  merchant: string | null;
+  category: string | null;
+  paymentMethod: string | null;
+  referenceNumber?: string | null;
   referenceNo?: string;
-  description?: string;
-  notes: string;
+  description?: string | null;
+  notes?: string;
+  confidence?: 'high' | 'medium' | 'low';
   items?: TransactionItem[];
-  isUncertain: boolean;
-  uncertainFields: string[];
-  detectionSummary: string;
+  isUncertain?: boolean;
+  uncertainFields?: string[];
+  detectionSummary?: string;
 }
 
 export type ActiveTab = 'overview' | 'cashflow' | 'scan' | 'balance' | 'analytics';
