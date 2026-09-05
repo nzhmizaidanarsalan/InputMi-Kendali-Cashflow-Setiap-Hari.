@@ -277,6 +277,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                   </div>
                   <span>Masuk dengan Google</span>
                 </button>
+                <p className="text-[11px] text-on-surface-variant/80 text-center">
+                  Mendukung browser mobile (Safari iOS, Chrome Android) & desktop.
+                </p>
               </div>
             ) : (
               <div className="pt-2 border-t border-surface-container space-y-2">

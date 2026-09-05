@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import {
+  getRedirectResult,
   onAuthStateChanged,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
 } from 'firebase/auth';
@@ -270,6 +272,29 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
+    // Check for incoming redirect authentication result (iOS Safari, Android Chrome fallback)
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result && result.user) {
+          const u = result.user;
+          setUser({
+            uid: u.uid,
+            displayName: u.displayName || 'Pengguna Google',
+            email: u.email,
+            photoURL: u.photoURL,
+            isAnonymous: false,
+          });
+          setCloudSyncStatus('synced');
+          showToast(`Selamat datang, ${u.displayName || 'Pengguna Google'}!`);
+        }
+      })
+      .catch((err) => {
+        console.warn('Redirect auth result error:', err);
+        if (err && err.code) {
+          handleAuthError(err);
+        }
+      });
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setIsAuthLoading(false);
 
@@ -479,28 +504,82 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
   }, [user]);
 
+  // User-friendly Firebase Auth error mapper
+  const handleAuthError = (err: any) => {
+    const code = err?.code || '';
+    console.warn('Firebase Auth notice:', code, err);
+
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      showToast('Proses masuk dengan Google dibatalkan.');
+    } else if (code === 'auth/unauthorized-domain') {
+      const hostname = window.location.hostname;
+      showToast(
+        `Domain "${hostname}" belum diotorisasi di Firebase. Tambahkan domain ini ke Firebase Console > Authentication > Settings > Authorized Domains.`
+      );
+    } else if (code === 'auth/popup-blocked') {
+      showToast('Jendela login terblokir oleh browser. Mengalihkan ke Google...');
+    } else if (code === 'auth/network-request-failed') {
+      showToast('Koneksi internet bermasalah. Periksa jaringan Anda dan coba lagi.');
+    } else if (code === 'auth/operation-not-allowed') {
+      showToast('Metode masuk Google belum diaktifkan di Firebase Console.');
+    } else if (code === 'auth/user-disabled') {
+      showToast('Akun Google ini telah dinonaktifkan.');
+    } else if (code === 'auth/account-exists-with-different-credential') {
+      showToast('Akun sudah terdaftar dengan metode masuk yang berbeda.');
+    } else {
+      showToast('Gagal masuk dengan Google. Silakan coba kembali.');
+    }
+    setCloudSyncStatus(navigator.onLine ? 'unauthenticated' : 'offline');
+  };
+
   // Auth Methods
   const signInWithGoogle = async () => {
     try {
       setCloudSyncStatus('syncing');
-      const result = await signInWithPopup(auth, googleProvider);
-      setUser({
-        uid: result.user.uid,
-        displayName: result.user.displayName || 'Pengguna Google',
-        email: result.user.email,
-        photoURL: result.user.photoURL,
-        isAnonymous: false,
-      });
-      setCloudSyncStatus('synced');
-      showToast(`Selamat datang, ${result.user.displayName || 'Pengguna Google'}!`);
-    } catch (err: any) {
-      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
-        showToast('Proses masuk Google dibatalkan.');
-      } else {
-        console.error('Google sign in error:', err);
-        showToast(`Gagal masuk dengan Google: ${err?.message || 'Terjadi kesalahan'}`);
+
+      const isMobile =
+        /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+        window.innerWidth <= 768;
+
+      try {
+        const result = await signInWithPopup(auth, googleProvider);
+        if (result && result.user) {
+          const u = result.user;
+          setUser({
+            uid: u.uid,
+            displayName: u.displayName || 'Pengguna Google',
+            email: u.email,
+            photoURL: u.photoURL,
+            isAnonymous: false,
+          });
+          setCloudSyncStatus('synced');
+          showToast(`Selamat datang, ${u.displayName || 'Pengguna Google'}!`);
+          return;
+        }
+      } catch (popupErr: any) {
+        const code = popupErr?.code || '';
+
+        // If popup blocked or on mobile where popup is blocked/unreliable, fallback safely to redirect
+        if (
+          code === 'auth/popup-blocked' ||
+          code === 'auth/cancelled-popup-request' ||
+          (isMobile && code === 'auth/popup-closed-by-user')
+        ) {
+          console.info('Popup blocked or cancelled on mobile, initiating signInWithRedirect...');
+          try {
+            await signInWithRedirect(auth, googleProvider);
+            return;
+          } catch (redirectErr: any) {
+            handleAuthError(redirectErr);
+            return;
+          }
+        }
+
+        handleAuthError(popupErr);
+        return;
       }
-      setCloudSyncStatus(navigator.onLine ? 'unauthenticated' : 'offline');
+    } catch (err: any) {
+      handleAuthError(err);
     }
   };
 

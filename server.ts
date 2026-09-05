@@ -50,8 +50,14 @@ async function startServer() {
         });
       }
 
-      // Check for clean base64 data (strip prefix data:image/...;base64, if present)
-      const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
+      // Check for clean base64 data (strip prefix data:image/...;base64, and any whitespace/newlines)
+      const cleanBase64 = String(imageBase64)
+        .replace(/^data:[^;]+;base64,/, '')
+        .replace(/\s/g, '');
+      const cleanMime =
+        typeof mimeType === 'string' && mimeType.startsWith('image/')
+          ? mimeType
+          : 'image/jpeg';
 
       const ai = getAiClient();
       if (!ai) {
@@ -106,7 +112,7 @@ Jangan pernah mengarang angka jika tidak yakin. Jika nominal atau nama toko mera
           parts: [
             {
               inlineData: {
-                mimeType: mimeType || 'image/jpeg',
+                mimeType: cleanMime,
                 data: cleanBase64,
               },
             },
