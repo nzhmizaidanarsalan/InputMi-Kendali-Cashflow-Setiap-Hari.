@@ -60,9 +60,41 @@
         "dueDate": { "type": "string" },
         "monthlyChange": { "type": "string" },
         "monthlyChangeType": { "type": "string" },
-        "icon": { "type": "string" }
+        "icon": { "type": "string" },
+        "reminderState": {
+          "type": "object",
+          "properties": {
+            "h3Sent": { "type": "boolean" },
+            "h1Sent": { "type": "boolean" },
+            "dueDateSent": { "type": "boolean" },
+            "lastEvaluatedDueDate": { "type": "string" },
+            "updatedAt": { "type": "number" }
+          }
+        }
       },
       "required": ["name", "category", "categoryLabel", "totalRemaining", "dueDate", "icon"]
+    },
+    "PushSubscription": {
+      "title": "PushSubscription",
+      "description": "Langganan Web Push per perangkat pengguna",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "keys": {
+          "type": "object",
+          "properties": {
+            "p256dh": { "type": "string" },
+            "auth": { "type": "string" }
+          }
+        },
+        "userAgent": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["endpoint", "keys"]
     },
     "BalanceAuditChange": {
       "title": "BalanceAuditChange",
@@ -116,6 +148,10 @@
     "/users/{userId}/balanceChanges/{changeId}": {
       "schema": "BalanceAuditChange",
       "description": "Koleksi riwayat audit perubahan neraca pengguna"
+    },
+    "/users/{userId}/pushSubscriptions/{subscriptionId}": {
+      "schema": "PushSubscription",
+      "description": "Koleksi langganan push notification per perangkat pengguna"
     },
     "/users/{userId}/scannedReceipts/{receiptId}": {
       "schema": "ScannedReceiptRecord",

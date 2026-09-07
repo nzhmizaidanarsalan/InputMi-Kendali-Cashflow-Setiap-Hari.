@@ -3,6 +3,10 @@ import path from 'path';
 import dotenv from 'dotenv';
 import healthHandler from './api/health';
 import scanReceiptHandler from './api/scan-receipt';
+import pushVapidKeyHandler from './api/push-vapid-key';
+import pushSubscribeHandler from './api/push-subscribe';
+import checkRemindersHandler from './api/check-reminders';
+import schedulerReminderHandler from './api/scheduler-reminder';
 
 dotenv.config();
 
@@ -19,6 +23,12 @@ async function startServer() {
 
   // Receipt Scanner AI OCR API
   app.all('/api/scan-receipt', (req, res) => scanReceiptHandler(req, res));
+
+  // Web Push & Reminder API
+  app.all('/api/push-vapid-key', (req, res) => pushVapidKeyHandler(req, res));
+  app.all('/api/push-subscribe', (req, res) => pushSubscribeHandler(req, res));
+  app.all('/api/check-reminders', (req, res) => checkRemindersHandler(req, res));
+  app.all('/api/scheduler-reminder', (req, res) => schedulerReminderHandler(req, res));
 
   // Serve public static assets (favicons, manifests, logos, open graph images) directly
   app.use(express.static(path.join(process.cwd(), 'public')));

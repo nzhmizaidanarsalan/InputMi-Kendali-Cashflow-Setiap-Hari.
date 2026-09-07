@@ -8,9 +8,42 @@ interface NotificationSheetProps {
 }
 
 export const NotificationSheet: React.FC<NotificationSheetProps> = ({ isOpen, onClose }) => {
-  const { liabilities, savingsRate, netCashflow } = useFinance();
+  const {
+    liabilities,
+    savingsRate,
+    netCashflow,
+    pushPermission,
+    isPushSubscribed,
+    enableWebPushReminders,
+    disableWebPushReminders,
+    testSendWebPushReminder,
+  } = useFinance();
+
+  const [isProcessing, setIsProcessing] = React.useState(false);
 
   if (!isOpen) return null;
+
+  const handleTogglePush = async () => {
+    setIsProcessing(true);
+    try {
+      if (isPushSubscribed) {
+        await disableWebPushReminders();
+      } else {
+        await enableWebPushReminders();
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleTestNotification = async () => {
+    setIsProcessing(true);
+    try {
+      await testSendWebPushReminder();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   return (
     <div
@@ -41,6 +74,76 @@ export const NotificationSheet: React.FC<NotificationSheetProps> = ({ isOpen, on
         </div>
 
         <div className="p-5 space-y-3.5 overflow-y-auto">
+          {/* Web Push Configuration Card */}
+          <div className="p-4 rounded-2xl bg-surface-container-low border border-surface-container space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                  isPushSubscribed ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container text-on-surface-variant'
+                }`}>
+                  <span className="material-symbols-outlined text-[20px]">
+                    {isPushSubscribed ? 'notifications_active' : 'notifications_off'}
+                  </span>
+                </div>
+                <div>
+                  <h3 className="font-label-md text-label-md text-on-surface font-semibold">
+                    Pengingat Jatuh Tempo Web Push
+                  </h3>
+                  <p className="text-[11px] text-on-surface-variant">
+                    Pengingat privasi otomatis di H-3, H-1, &amp; Hari H
+                  </p>
+                </div>
+              </div>
+
+              {isPushSubscribed && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-[11px] font-semibold shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-secondary" />
+                  Aktif
+                </span>
+              )}
+            </div>
+
+            {pushPermission === 'denied' ? (
+              <p className="text-body-sm text-error bg-error-container/20 p-2.5 rounded-xl border border-error-container/30">
+                Izin notifikasi diblokir oleh browser. Silakan izinkan notifikasi pada setelan situs browser Anda untuk mengaktifkan pengingat.
+              </p>
+            ) : pushPermission === 'unsupported' ? (
+              <p className="text-body-sm text-on-surface-variant">
+                Browser ini tidak mendukung Web Push Notifications.
+              </p>
+            ) : (
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={handleTogglePush}
+                  className={`flex-1 min-h-[40px] px-3 py-1.5 rounded-xl font-label-sm text-label-sm font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-98 ${
+                    isPushSubscribed
+                      ? 'bg-surface-container hover:bg-surface-container-high text-on-surface'
+                      : 'bg-primary text-on-primary shadow-2xs hover:brightness-110'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-[16px]">
+                    {isPushSubscribed ? 'notifications_paused' : 'notifications'}
+                  </span>
+                  <span>{isPushSubscribed ? 'Nonaktifkan' : 'Aktifkan Pengingat'}</span>
+                </button>
+
+                {isPushSubscribed && (
+                  <button
+                    type="button"
+                    disabled={isProcessing}
+                    onClick={handleTestNotification}
+                    className="min-h-[40px] px-3 py-1.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface font-label-sm text-label-sm font-semibold flex items-center justify-center gap-1 transition-all active:scale-98"
+                    title="Uji coba pengiriman notifikasi sekarang"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">send</span>
+                    <span>Uji Coba</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           {/* Bill due reminder */}
           {liabilities.map((liab) => (
             <div

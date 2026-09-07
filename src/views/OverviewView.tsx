@@ -13,6 +13,7 @@ export const OverviewView: React.FC = () => {
     totalLiabilities,
     netWorth,
     transactions,
+    periodTransactions,
     assets,
     liabilities,
     weeklyData,
@@ -22,8 +23,8 @@ export const OverviewView: React.FC = () => {
     selectedPeriod,
   } = useFinance();
 
-  const recentTransactions = transactions.slice(0, 5);
-  const hasTransactions = transactions.length > 0;
+  const recentTransactions = periodTransactions.slice(0, 5);
+  const hasTransactions = periodTransactions.length > 0;
 
   return (
     <div id="overview-view" className="space-y-6 max-w-2xl mx-auto">
@@ -224,7 +225,7 @@ export const OverviewView: React.FC = () => {
               onClick={() => setActiveTab('cashflow')}
               className="font-label-md text-label-md text-secondary hover:underline flex items-center gap-0.5 font-semibold"
             >
-              <span>Lihat Semua ({transactions.length})</span>
+              <span>Lihat Semua ({periodTransactions.length})</span>
               <span className="material-symbols-outlined text-[18px]">chevron_right</span>
             </button>
           )}

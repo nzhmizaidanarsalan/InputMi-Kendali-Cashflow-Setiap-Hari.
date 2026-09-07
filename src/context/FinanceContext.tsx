@@ -29,12 +29,23 @@ import {
 } from '../utils/firestoreSanitizer';
 import { uploadReceiptToStorage } from '../utils/storageUpload';
 import { formatNumberIDR } from '../utils/formatters';
+import { filterTransactionsByPeriod } from '../utils/periodUtils';
+import {
+  isWebPushSupported,
+  getNotificationPermission,
+  registerServiceWorker,
+  subscribeToWebPush,
+  unsubscribeFromWebPush,
+  checkCurrentSubscription,
+  checkDueLiabilitiesReminders,
+} from '../utils/webPush';
 import {
   ActiveTab,
   Asset,
   BalanceAuditChange,
   CloudSyncStatus,
   Liability,
+  LiabilityReminderState,
   ScannedReceiptRecord,
   Transaction,
   UserProfile,
@@ -68,10 +79,18 @@ interface FinanceContextType {
 
   // Data Collections
   transactions: Transaction[];
+  periodTransactions: Transaction[];
   assets: Asset[];
   liabilities: Liability[];
   balanceChanges: BalanceAuditChange[];
   scannedReceipts: ScannedReceiptRecord[];
+
+  // Web Push Notifications
+  pushPermission: NotificationPermission | 'unsupported';
+  isPushSubscribed: boolean;
+  enableWebPushReminders: () => Promise<{ success: boolean; error?: string }>;
+  disableWebPushReminders: () => Promise<boolean>;
+  testSendWebPushReminder: () => Promise<{ success: boolean; message?: string }>;
 
   // Computed Financial Metrics (Strictly starts at 0 for new user)
   totalIncome: number;
@@ -758,18 +777,122 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setLightboxImageUrl(null);
   };
 
-  // Financial calculations (Pure mathematical derivation, starts at 0)
+  // Web Push Notifications State
+  const [pushPermission, setPushPermission] = useState<NotificationPermission | 'unsupported'>(() => {
+    return getNotificationPermission();
+  });
+  const [isPushSubscribed, setIsPushSubscribed] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isWebPushSupported()) {
+      registerServiceWorker();
+      checkCurrentSubscription().then((active) => {
+        setIsPushSubscribed(active);
+        setPushPermission(getNotificationPermission());
+      });
+    }
+  }, [user]);
+
+  const enableWebPushReminders = async () => {
+    const effectiveUserId = user?.uid || 'guest_user';
+    const res = await subscribeToWebPush(effectiveUserId);
+    setPushPermission(getNotificationPermission());
+    if (res.success) {
+      setIsPushSubscribed(true);
+      showToast('Pengingat Web Push berhasil diaktifkan!');
+      if (liabilities.length > 0) {
+        checkDueLiabilitiesReminders(effectiveUserId, liabilities);
+      }
+      return { success: true };
+    } else {
+      showToast(res.error || 'Gagal mengaktifkan pengingat.');
+      return { success: false, error: res.error };
+    }
+  };
+
+  const disableWebPushReminders = async () => {
+    const effectiveUserId = user?.uid || 'guest_user';
+    const ok = await unsubscribeFromWebPush(effectiveUserId);
+    if (ok) {
+      setIsPushSubscribed(false);
+      showToast('Pengingat Web Push dinonaktifkan.');
+    }
+    return ok;
+  };
+
+  const testSendWebPushReminder = async () => {
+    if (!isWebPushSupported()) {
+      showToast('Browser ini tidak mendukung Web Push.');
+      return { success: false, message: 'Browser tidak mendukung Web Push' };
+    }
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = await reg?.pushManager.getSubscription();
+      if (!sub) {
+        showToast('Aktifkan izin notifikasi terlebih dahulu.');
+        return { success: false, message: 'Belum ada langganan push aktif' };
+      }
+
+      const res = await fetch('/api/check-reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user?.uid || 'guest_user',
+          testSend: true,
+          testSubscription: sub.toJSON(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Notifikasi uji coba terkirim!');
+        return { success: true, message: data.message };
+      } else {
+        showToast(data.error || 'Gagal mengirim notifikasi.');
+        return { success: false, message: data.error };
+      }
+    } catch (e: any) {
+      showToast('Gagal memproses notifikasi.');
+      return { success: false, message: e?.message };
+    }
+  };
+
+  // Evaluate liabilities reminder in background without spamming duplicates
+  useEffect(() => {
+    if (isPushSubscribed && liabilities.length > 0) {
+      const effectiveUserId = user?.uid || 'guest_user';
+      checkDueLiabilitiesReminders(effectiveUserId, liabilities).then((res) => {
+        if (res && res.updatedLiabilities && res.updatedLiabilities.length > 0) {
+          setLiabilities((prev) =>
+            prev.map((l) => {
+              const match = res.updatedLiabilities.find((u: any) => u.id === l.id);
+              if (match && match.reminderState) {
+                return { ...l, reminderState: match.reminderState };
+              }
+              return l;
+            })
+          );
+        }
+      });
+    }
+  }, [liabilities.length, isPushSubscribed, user?.uid]);
+
+  // Transactions filtered by selected period (e.g. 'September 2026', 'Agustus 2026', 'Semua Periode')
+  const periodTransactions = useMemo(() => {
+    return filterTransactionsByPeriod(transactions, selectedPeriod);
+  }, [transactions, selectedPeriod]);
+
+  // Financial calculations (Derived strictly from selected period, starts at 0 for new user or empty month)
   const totalIncome = useMemo(() => {
-    return transactions
+    return periodTransactions
       .filter((t) => t.type === 'income')
       .reduce((sum, t) => sum + t.amount, 0);
-  }, [transactions]);
+  }, [periodTransactions]);
 
   const totalExpense = useMemo(() => {
-    return transactions
+    return periodTransactions
       .filter((t) => t.type === 'expense')
       .reduce((sum, t) => sum + t.amount, 0);
-  }, [transactions]);
+  }, [periodTransactions]);
 
   const netCashflow = useMemo(() => {
     return totalIncome - totalExpense;
@@ -802,14 +925,14 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return Math.max(0, 100 - solvencyAssetPercent);
   }, [solvencyAssetPercent]);
 
-  // Weekly breakdown calculation
+  // Weekly breakdown calculation for period
   const weeklyData = useMemo(() => {
     const w1 = { week: 'M1', income: 0, expense: 0 };
     const w2 = { week: 'M2', income: 0, expense: 0 };
     const w3 = { week: 'M3', income: 0, expense: 0 };
     const w4 = { week: 'M4 (Kini)', income: 0, expense: 0, isCurrent: true };
 
-    transactions.forEach((tx) => {
+    periodTransactions.forEach((tx) => {
       const day = parseInt(tx.date.split('-')[2] || '1', 10);
       let target = w1;
       if (day <= 7) target = w1;
@@ -825,12 +948,12 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     return [w1, w2, w3, w4];
-  }, [transactions]);
+  }, [periodTransactions]);
 
-  // Category breakdown
+  // Category breakdown for period
   const categoryBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
-    transactions
+    periodTransactions
       .filter((t) => t.type === 'expense')
       .forEach((t) => {
         map[t.category] = (map[t.category] || 0) + t.amount;
@@ -847,12 +970,12 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         percentage: Math.round((amount / total) * 100),
         color: colors[idx % colors.length],
       }));
-  }, [transactions]);
+  }, [periodTransactions]);
 
-  // Income sources breakdown
+  // Income sources breakdown for period
   const incomeBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
-    transactions
+    periodTransactions
       .filter((t) => t.type === 'income')
       .forEach((t) => {
         map[t.title] = (map[t.title] || 0) + t.amount;
@@ -869,7 +992,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         percentage: Math.round((amount / total) * 100),
         color: colors[idx % colors.length],
       }));
-  }, [transactions]);
+  }, [periodTransactions]);
 
   // Firestore Mutators (Optimistic Local + Cloud Firestore Sync)
   const addTransaction = async (txData: Omit<Transaction, 'id' | 'createdAt'>): Promise<Transaction> => {
@@ -1144,15 +1267,23 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Liability Mutators
   const addLiability = async (liabData: Omit<Liability, 'id'>) => {
+    const cleanDueDate = liabData.dueDate && liabData.dueDate.trim() ? liabData.dueDate.trim() : 'Akhir Bulan';
     const newLiab: Liability = {
       ...liabData,
       name: liabData.name.trim(),
       monthlyPayment: typeof liabData.monthlyPayment === 'number' && liabData.monthlyPayment > 0 ? liabData.monthlyPayment : null,
       monthlyChange: liabData.monthlyChange && liabData.monthlyChange.trim() ? liabData.monthlyChange.trim() : null,
       monthlyChangeType: liabData.monthlyChangeType || null,
-      dueDate: liabData.dueDate && liabData.dueDate.trim() ? liabData.dueDate.trim() : 'Akhir Bulan',
+      dueDate: cleanDueDate,
       id: `liab-${Date.now()}`,
       pendingSync: !user,
+      reminderState: {
+        h3Sent: false,
+        h1Sent: false,
+        dueDateSent: false,
+        lastEvaluatedDueDate: cleanDueDate,
+        updatedAt: Date.now(),
+      },
     };
     const newAudit: BalanceAuditChange = {
       id: `ch-${Date.now()}`,
@@ -1185,10 +1316,24 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const updateLiability = async (id: string, updates: Partial<Liability>) => {
+    const existing = liabilities.find((l) => l.id === id);
+    let reminderState = updates.reminderState || existing?.reminderState;
+    if (updates.dueDate && existing && updates.dueDate.trim() !== existing.dueDate) {
+      // If due date was altered, reset reminder flags so reminders can trigger for the new date
+      reminderState = {
+        h3Sent: false,
+        h1Sent: false,
+        dueDateSent: false,
+        lastEvaluatedDueDate: updates.dueDate.trim(),
+        updatedAt: Date.now(),
+      };
+    }
+
     const cleanUpdates = {
       ...updates,
       monthlyPayment: updates.monthlyPayment !== undefined ? (typeof updates.monthlyPayment === 'number' && updates.monthlyPayment > 0 ? updates.monthlyPayment : null) : undefined,
       monthlyChange: updates.monthlyChange && updates.monthlyChange.trim() ? updates.monthlyChange.trim() : null,
+      reminderState,
     };
 
     setLiabilities((prev) =>
@@ -1366,10 +1511,16 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         retrySyncAllPending,
         hasUnsyncedLocalData,
         transactions,
+        periodTransactions,
         assets,
         liabilities,
         balanceChanges,
         scannedReceipts,
+        pushPermission,
+        isPushSubscribed,
+        enableWebPushReminders,
+        disableWebPushReminders,
+        testSendWebPushReminder,
         totalIncome,
         totalExpense,
         netCashflow,

@@ -18,7 +18,14 @@ export const BalanceView: React.FC = () => {
     deleteAsset,
     deleteLiability,
     payLiability,
+    pushPermission,
+    isPushSubscribed,
+    enableWebPushReminders,
+    disableWebPushReminders,
+    testSendWebPushReminder,
   } = useFinance();
+
+  const [isPushProcessing, setIsPushProcessing] = useState(false);
 
   const [assetCategoryFilter, setAssetCategoryFilter] = useState<string>('all');
   const [isAddAssetOpen, setIsAddAssetOpen] = useState(false);
@@ -407,6 +414,97 @@ export const BalanceView: React.FC = () => {
             <span className="material-symbols-outlined text-[16px]">add</span>
             <span>Tambah</span>
           </button>
+        </div>
+
+        {/* Web Push Due Date Reminder Control Card */}
+        <div
+          id="liability-push-notification-banner"
+          className="p-3.5 sm:p-4 rounded-2xl bg-surface-container-lowest border border-surface-container flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                isPushSubscribed
+                  ? 'bg-secondary-container text-on-secondary-container'
+                  : 'bg-surface-container text-on-surface-variant'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[20px]">
+                {isPushSubscribed ? 'notifications_active' : 'notifications'}
+              </span>
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-label-md text-label-md font-semibold text-on-surface truncate">
+                  Pengingat Jatuh Tempo Web Push
+                </span>
+                {isPushSubscribed && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-[11px] font-semibold shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-secondary" />
+                    Aktif (H-3, H-1, Hari H)
+                  </span>
+                )}
+              </div>
+              <p className="text-[12px] text-on-surface-variant line-clamp-1 sm:line-clamp-none">
+                Notifikasi privasi otomatis dikirim 3 hari sebelum, 1 hari sebelum, dan di hari jatuh tempo.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {pushPermission === 'denied' ? (
+              <span className="text-[12px] text-error font-medium">Izin Diblokir Browser</span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={isPushProcessing}
+                  onClick={async () => {
+                    setIsPushProcessing(true);
+                    try {
+                      if (isPushSubscribed) {
+                        await disableWebPushReminders();
+                      } else {
+                        await enableWebPushReminders();
+                      }
+                    } finally {
+                      setIsPushProcessing(false);
+                    }
+                  }}
+                  className={`min-h-[36px] px-3.5 py-1.5 rounded-xl font-label-sm text-label-sm font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
+                    isPushSubscribed
+                      ? 'bg-surface-container hover:bg-surface-container-high text-on-surface'
+                      : 'bg-primary text-on-primary shadow-2xs hover:brightness-110'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-[16px]">
+                    {isPushSubscribed ? 'notifications_off' : 'notifications'}
+                  </span>
+                  <span>{isPushSubscribed ? 'Nonaktifkan' : 'Aktifkan'}</span>
+                </button>
+
+                {isPushSubscribed && (
+                  <button
+                    type="button"
+                    disabled={isPushProcessing}
+                    onClick={async () => {
+                      setIsPushProcessing(true);
+                      try {
+                        await testSendWebPushReminder();
+                      } finally {
+                        setIsPushProcessing(false);
+                      }
+                    }}
+                    className="min-h-[36px] px-3 py-1.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface font-label-sm text-label-sm font-semibold flex items-center gap-1 transition-all active:scale-95"
+                    title="Kirim pengingat uji coba ke perangkat ini"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">send</span>
+                    <span>Uji Coba</span>
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         {/* Liability Cards */}

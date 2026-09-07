@@ -43,6 +43,14 @@ export interface Asset {
 
 export type LiabilityCategory = 'kendaraan' | 'konsumsi' | 'fintech' | 'kpr' | 'lainnya';
 
+export interface LiabilityReminderState {
+  h3Sent?: boolean;
+  h1Sent?: boolean;
+  dueDateSent?: boolean;
+  lastEvaluatedDueDate?: string;
+  updatedAt?: number;
+}
+
 export interface Liability {
   id: string;
   name: string;
@@ -55,6 +63,7 @@ export interface Liability {
   monthlyChangeType?: 'positive' | 'neutral' | 'negative' | null;
   icon: string;
   pendingSync?: boolean;
+  reminderState?: LiabilityReminderState;
 }
 
 export interface BalanceAuditChange {

@@ -139,6 +139,15 @@ export function cleanLiabilityForFirestore(liab: Partial<Liability>): Record<str
     icon: (liab.icon || 'credit_card').trim(),
     monthlyChange: liab.monthlyChange ? liab.monthlyChange.trim() : null,
     monthlyChangeType: liab.monthlyChangeType || null,
+    reminderState: liab.reminderState
+      ? {
+          h3Sent: !!liab.reminderState.h3Sent,
+          h1Sent: !!liab.reminderState.h1Sent,
+          dueDateSent: !!liab.reminderState.dueDateSent,
+          lastEvaluatedDueDate: liab.reminderState.lastEvaluatedDueDate || null,
+          updatedAt: liab.reminderState.updatedAt || Date.now(),
+        }
+      : null,
   };
 
   return sanitizeForFirestore(payload);
