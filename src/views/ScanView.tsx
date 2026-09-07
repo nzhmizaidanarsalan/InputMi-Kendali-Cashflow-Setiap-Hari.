@@ -30,6 +30,7 @@ export const ScanView: React.FC = () => {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [scanErrorCode, setScanErrorCode] = useState<string | null>(null);
 
   // Active uploaded image state for preview and saving
   const [currentPreviewUrl, setCurrentPreviewUrl] = useState<string | null>(null);
@@ -152,24 +153,48 @@ export const ScanView: React.FC = () => {
 
     try {
       // 2. Call OCR backend API with clean base64 data and contextual sourceMode
-      const response = await fetch('/api/scan-receipt', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          imageBase64: processed.cleanBase64,
-          mimeType: processed.mimeType,
-          sourceMode,
-        }),
-      });
+      let response: Response;
+      try {
+        response = await fetch('/api/scan-receipt', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            imageBase64: processed.cleanBase64,
+            mimeType: processed.mimeType,
+            sourceMode,
+          }),
+        });
+      } catch (fetchErr: any) {
+        console.error('Fetch to /api/scan-receipt failed:', fetchErr);
+        const errObj = new Error('Endpoint OCR tidak dapat dihubungi (AI_SERVER_UNAVAILABLE). Silakan input manual atau periksa konfigurasi jaringan.');
+        (errObj as any).errorCode = 'AI_SERVER_UNAVAILABLE';
+        throw errObj;
+      }
 
-      const result = await response.json();
+      const contentType = response.headers.get('content-type') || '';
+      let result: any = null;
 
-      if (!response.ok || !result.success) {
-        const errorMsg = result?.error || 'Gagal memindai struk dengan AI Vision.';
+      if (contentType.includes('application/json')) {
+        try {
+          result = await response.json();
+        } catch (jsonErr) {
+          console.error('Failed to parse JSON response:', jsonErr);
+        }
+      }
+
+      if (!response.ok || !result || !result.success) {
+        let code = result?.errorCode;
+        if (!code) {
+          if (response.status === 404) code = 'AI_SERVER_UNAVAILABLE';
+          else if (response.status === 503) code = 'AI_MODEL_UNAVAILABLE';
+          else if (response.status === 400) code = 'INVALID_IMAGE_PAYLOAD';
+          else code = 'AI_REQUEST_FAILED';
+        }
+        const errorMsg = result?.error || `Gagal memindai struk (${code}, status ${response.status}).`;
         const errObj = new Error(errorMsg);
-        (errObj as any).errorCode = result?.errorCode || 'API_ERROR';
+        (errObj as any).errorCode = code;
         throw errObj;
       }
 
@@ -219,10 +244,12 @@ export const ScanView: React.FC = () => {
 
       if (isLowConfidence) {
         setIsManualFallback(true);
+        setScanErrorCode('OCR_LOW_CONFIDENCE');
         setScanError('Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.');
         showToast('Gambar berhasil dimuat. Silakan lengkapi data transaksi.');
       } else {
         setIsManualFallback(false);
+        setScanErrorCode(null);
         setScanError(null);
         showToast('Bukti transaksi berhasil dipindai oleh AI Vision.');
       }
@@ -240,18 +267,18 @@ export const ScanView: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Scan error:', err);
-      // Requirement 8: Production Error Handling & Manual Fallback
-      // Differentiate between technical AI errors, network, and unreadable images.
-      let friendlyError = 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.';
-      const code = err?.errorCode;
-      const message = String(err?.message || '');
+      const code = err?.errorCode || 'UNKNOWN_ERROR';
+      setScanErrorCode(code);
 
-      if (code === 'MODEL_OVERLOADED' || code === 'MODEL_UNAVAILABLE' || code === 'API_KEY_MISSING') {
-        friendlyError = err.message;
-      } else if (code === 'UNSUPPORTED_MIME' || code === 'INVALID_PAYLOAD') {
-        friendlyError = err.message;
-      } else if (message.includes('fetch') || message.includes('network') || message.includes('Failed to fetch')) {
-        friendlyError = 'Koneksi jaringan terputus saat memindai gambar. Anda dapat menginput transaksi secara manual.';
+      let friendlyError = 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.';
+      if (code === 'AI_API_KEY_MISSING') {
+        friendlyError = 'Kunci API Gemini belum dikonfigurasi (AI_API_KEY_MISSING). Anda dapat menginput transaksi secara manual.';
+      } else if (code === 'AI_SERVER_UNAVAILABLE') {
+        friendlyError = 'Endpoint server AI tidak dapat dihubungi (AI_SERVER_UNAVAILABLE). Anda dapat menginput transaksi secara manual.';
+      } else if (code === 'AI_MODEL_UNAVAILABLE') {
+        friendlyError = 'Layanan AI sedang sibuk atau antrean penuh (AI_MODEL_UNAVAILABLE). Silakan input manual atau coba lagi.';
+      } else if (code === 'INVALID_IMAGE_PAYLOAD') {
+        friendlyError = 'Format gambar tidak dapat dibaca oleh AI (INVALID_IMAGE_PAYLOAD). Silakan input manual atau pilih gambar lain.';
       } else if (err.message && !err.message.includes('Gagal memindai')) {
         friendlyError = err.message;
       }
@@ -304,26 +331,51 @@ export const ScanView: React.FC = () => {
 
     setIsScanning(true);
     setScanError(null);
+    setScanErrorCode(null);
 
     try {
       const cleanBase64 = currentDataUrl.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
       const mimeMatch = currentDataUrl.match(/^data:([^;]+);base64,/);
       const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
-      const response = await fetch('/api/scan-receipt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: cleanBase64,
-          mimeType,
-          sourceMode: lastSourceMode,
-        }),
-      });
+      let response: Response;
+      try {
+        response = await fetch('/api/scan-receipt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: cleanBase64,
+            mimeType,
+            sourceMode: lastSourceMode,
+          }),
+        });
+      } catch (fetchErr) {
+        const errObj = new Error('Endpoint OCR tidak dapat dihubungi (AI_SERVER_UNAVAILABLE).');
+        (errObj as any).errorCode = 'AI_SERVER_UNAVAILABLE';
+        throw errObj;
+      }
 
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        const errObj = new Error(result?.error || 'Gagal membaca struk.');
-        (errObj as any).errorCode = result?.errorCode || 'API_ERROR';
+      const contentType = response.headers.get('content-type') || '';
+      let result: any = null;
+
+      if (contentType.includes('application/json')) {
+        try {
+          result = await response.json();
+        } catch (jsonErr) {
+          console.error('Failed to parse JSON response on rescan:', jsonErr);
+        }
+      }
+
+      if (!response.ok || !result || !result.success) {
+        let code = result?.errorCode;
+        if (!code) {
+          if (response.status === 404) code = 'AI_SERVER_UNAVAILABLE';
+          else if (response.status === 503) code = 'AI_MODEL_UNAVAILABLE';
+          else if (response.status === 400) code = 'INVALID_IMAGE_PAYLOAD';
+          else code = 'AI_REQUEST_FAILED';
+        }
+        const errObj = new Error(result?.error || `Gagal membaca struk (${code}).`);
+        (errObj as any).errorCode = code;
         throw errObj;
       }
 
@@ -371,21 +423,33 @@ export const ScanView: React.FC = () => {
 
       if (isLowConfidence) {
         setIsManualFallback(true);
+        setScanErrorCode('OCR_LOW_CONFIDENCE');
         setScanError('Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.');
         showToast('Gambar berhasil dimuat. Silakan lengkapi data transaksi.');
       } else {
         setIsManualFallback(false);
+        setScanErrorCode(null);
         setScanError(null);
         showToast('Bukti transaksi berhasil dipindai oleh AI Vision.');
       }
     } catch (err: any) {
       console.error('Rescan error:', err);
+      const code = err?.errorCode || 'UNKNOWN_ERROR';
+      setScanErrorCode(code);
+
       let friendlyError = 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.';
-      if (err?.errorCode === 'MODEL_OVERLOADED' || err?.errorCode === 'MODEL_UNAVAILABLE') {
-        friendlyError = err.message;
-      } else if (err?.message) {
+      if (code === 'AI_API_KEY_MISSING') {
+        friendlyError = 'Kunci API Gemini belum dikonfigurasi (AI_API_KEY_MISSING). Anda dapat menginput transaksi secara manual.';
+      } else if (code === 'AI_SERVER_UNAVAILABLE') {
+        friendlyError = 'Endpoint server AI tidak dapat dihubungi (AI_SERVER_UNAVAILABLE). Anda dapat menginput transaksi secara manual.';
+      } else if (code === 'AI_MODEL_UNAVAILABLE') {
+        friendlyError = 'Layanan AI sedang sibuk (AI_MODEL_UNAVAILABLE). Silakan input manual atau coba lagi.';
+      } else if (code === 'INVALID_IMAGE_PAYLOAD') {
+        friendlyError = 'Format gambar tidak dapat dibaca oleh AI (INVALID_IMAGE_PAYLOAD). Silakan input manual atau pilih gambar lain.';
+      } else if (err?.message && !err.message.includes('Gagal memindai')) {
         friendlyError = err.message;
       }
+
       setIsManualFallback(true);
       setScanError(friendlyError);
       showToast(friendlyError);
@@ -507,18 +571,22 @@ export const ScanView: React.FC = () => {
 
       // Save to scanned receipts history with the permanent storage URL or local preview
       if (rawReceiptUrl) {
-        await addScannedReceiptRecord({
-          merchant: finalTitle.trim(),
-          amount: amountNum,
-          date: editableDate,
-          time: editableTime,
-          imageUrl: savedTx?.receiptUrl || rawReceiptUrl,
-          fileName: currentFileName || 'struk.jpg',
-          fileSize: currentFileSize || '0 KB',
-          status: 'Tersimpan',
-          category: editableCategory,
-          paymentMethod: editablePayment,
-        });
+        try {
+          await addScannedReceiptRecord({
+            merchant: finalTitle.trim(),
+            amount: amountNum,
+            date: editableDate,
+            time: editableTime,
+            imageUrl: savedTx?.receiptUrl || (rawReceiptUrl.startsWith('http') ? rawReceiptUrl : ''),
+            fileName: currentFileName || 'struk.jpg',
+            fileSize: currentFileSize || '0 KB',
+            status: 'Tersimpan',
+            category: editableCategory,
+            paymentMethod: editablePayment,
+          });
+        } catch (recordErr) {
+          console.warn('Non-fatal scanned receipt history save error:', recordErr);
+        }
       }
 
       // Clean up preview URL
@@ -532,6 +600,7 @@ export const ScanView: React.FC = () => {
       setCurrentDataUrl(null);
       setDuplicateWarning(null);
       setIsManualFallback(false);
+      setScanErrorCode(null);
       showToast('Transaksi struk berhasil dicatat ke Cashflow!');
       setActiveTab('cashflow');
     } catch (err: any) {
@@ -551,6 +620,7 @@ export const ScanView: React.FC = () => {
     setReviewData(null);
     setDuplicateWarning(null);
     setScanError(null);
+    setScanErrorCode(null);
     setIsManualFallback(false);
   };
 
@@ -819,14 +889,24 @@ export const ScanView: React.FC = () => {
             <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 space-y-3 animate-in fade-in">
               <div className="flex items-start gap-2.5">
                 <span className="material-symbols-outlined text-[22px] text-amber-700 shrink-0 mt-0.5">
-                  info
+                  {scanErrorCode === 'AI_API_KEY_MISSING' || scanErrorCode === 'AI_SERVER_UNAVAILABLE' ? 'warning' : 'info'}
                 </span>
                 <div className="space-y-1">
                   <p className="font-semibold text-label-md text-amber-950">
-                    Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.
+                    {scanErrorCode === 'AI_API_KEY_MISSING'
+                      ? 'Kunci API AI Belum Dikonfigurasi (AI_API_KEY_MISSING)'
+                      : scanErrorCode === 'AI_SERVER_UNAVAILABLE'
+                      ? 'Server AI Tidak Terjangkau (AI_SERVER_UNAVAILABLE)'
+                      : scanErrorCode === 'AI_MODEL_UNAVAILABLE'
+                      ? 'Layanan AI Sedang Sibuk (AI_MODEL_UNAVAILABLE)'
+                      : scanErrorCode === 'INVALID_IMAGE_PAYLOAD'
+                      ? 'Format Gambar Tidak Sesuai (INVALID_IMAGE_PAYLOAD)'
+                      : scanErrorCode === 'INVALID_AI_RESPONSE'
+                      ? 'Respon AI Tidak Valid (INVALID_AI_RESPONSE)'
+                      : 'Gambar berhasil dimuat, tetapi data belum terbaca dengan yakin.'}
                   </p>
                   <p className="text-xs text-amber-800 leading-relaxed">
-                    Foto struk tetap terlampir dengan aman. Anda dapat melengkapi nominal dan merchant di bawah, memindai ulang, atau memilih foto yang lebih jelas.
+                    {scanError || 'Foto struk tetap terlampir dengan aman. Anda dapat melengkapi nominal dan merchant di bawah, memindai ulang, atau memilih foto yang lebih jelas.'}
                   </p>
                 </div>
               </div>

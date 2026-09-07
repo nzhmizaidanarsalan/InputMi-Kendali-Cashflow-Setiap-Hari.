@@ -19,6 +19,7 @@ export interface Transaction {
   receiptUrl?: string | null;
   receiptFileName?: string | null;
   receiptFileSize?: string | null;
+  storagePath?: string | null;
   items?: TransactionItem[];
   pendingSync?: boolean;
   syncError?: string | null;

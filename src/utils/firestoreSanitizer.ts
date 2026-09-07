@@ -85,6 +85,7 @@ export function cleanTransactionForFirestore(tx: Partial<Transaction>): Record<s
     createdAt: typeof tx.createdAt === 'number' ? tx.createdAt : Date.now(),
     // Receipt URL must be either valid string URL or explicitly null (never undefined)
     receiptUrl: tx.receiptUrl ? String(tx.receiptUrl).trim() : null,
+    storagePath: tx.storagePath ? String(tx.storagePath).trim() : null,
     // Audited optional fields
     note: tx.note && tx.note.trim() ? tx.note.trim() : null,
     receiptFileName: tx.receiptFileName && tx.receiptFileName.trim() ? tx.receiptFileName.trim() : null,
@@ -163,13 +164,17 @@ export function cleanAuditForFirestore(audit: Partial<BalanceAuditChange>): Reco
  * Builds a sanitized ScannedReceiptRecord payload for Firestore.
  */
 export function cleanReceiptRecordForFirestore(record: Partial<ScannedReceiptRecord>): Record<string, any> {
+  const rawImg = record.imageUrl ? String(record.imageUrl).trim() : null;
+  // If imageUrl is a huge data URL, do not send multi-megabytes to Firestore document
+  const safeImageUrl = rawImg && (rawImg.startsWith('http://') || rawImg.startsWith('https://')) ? rawImg : null;
+
   const payload: Record<string, any> = {
     id: record.id || `scan-${Date.now()}`,
     merchant: (record.merchant || 'Struk').trim(),
-    amount: typeof record.amount === 'number' && !isNaN(record.amount) ? record.amount : 0,
+    amount: typeof record.amount === 'number' && !isNaN(record.amount) ? Math.round(record.amount) : 0,
     date: record.date || new Date().toISOString().split('T')[0],
     time: record.time || new Date().toTimeString().slice(0, 5),
-    imageUrl: record.imageUrl || null,
+    imageUrl: safeImageUrl,
     fileName: record.fileName || null,
     fileSize: record.fileSize || null,
     status: record.status || 'Tersimpan',

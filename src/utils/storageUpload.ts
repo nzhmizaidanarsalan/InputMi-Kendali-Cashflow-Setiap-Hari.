@@ -1,5 +1,10 @@
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { storage } from '../lib/firebase';
+import { auth, storage } from '../lib/firebase';
+
+export interface StorageUploadResult {
+  downloadUrl: string;
+  storagePath: string;
+}
 
 /**
  * Converts a data URL, blob URL, or native File/Blob into a native Blob with content-type.
@@ -30,7 +35,6 @@ async function toBlob(input: string | Blob | File): Promise<{ blob: Blob; conten
 
   // Handle data: URLs
   if (input.startsWith('data:')) {
-    // Attempt fast native browser fetch for data URL first
     try {
       const res = await fetch(input);
       const blob = await res.blob();
@@ -39,7 +43,7 @@ async function toBlob(input: string | Blob | File): Promise<{ blob: Blob; conten
         contentType: blob.type || 'image/jpeg',
       };
     } catch {
-      // Fallback to manual decode if fetch fails
+      // Fallback to manual decode
     }
 
     const commaIndex = input.indexOf(',');
@@ -48,19 +52,15 @@ async function toBlob(input: string | Blob | File): Promise<{ blob: Blob; conten
     }
 
     const header = input.substring(0, commaIndex);
-    // Strip whitespace and newlines that cause DOMException in atob
     let base64Data = input.substring(commaIndex + 1).replace(/\s/g, '');
 
-    // Add required base64 padding if missing
     while (base64Data.length % 4 !== 0) {
       base64Data += '=';
     }
 
-    // Extract mime type safely
     const mimeMatch = header.match(/data:([^;]+)/);
     const contentType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
-    // Decode base64 to byte array
     const binaryString = atob(base64Data);
     const len = binaryString.length;
     const bytes = new Uint8Array(len);
@@ -81,16 +81,16 @@ async function toBlob(input: string | Blob | File): Promise<{ blob: Blob; conten
  * Uploads a receipt image to Firebase Storage under the authenticated user's directory.
  * Path structure: users/{uid}/receipts/{fileId}
  * 
- * Accepts string (data URL, blob URL, HTTP URL) or native File/Blob.
- * Returns the public download URL.
- * If already an external HTTP(S) URL, returns directly.
+ * Includes a strict 7-second timeout to ensure the UI NEVER hangs indefinitely
+ * when Firebase Storage is not provisioned or CORS blocks preflights.
  */
 export async function uploadReceiptToStorage(
   userId: string,
   receiptImageSource: string | File | Blob,
   fileName?: string
-): Promise<string> {
-  if (!userId || !userId.trim()) {
+): Promise<StorageUploadResult> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid || currentUser.uid !== userId) {
     throw new Error('Pengguna belum terautentikasi untuk menyimpan berkas ke Cloud.');
   }
 
@@ -100,7 +100,7 @@ export async function uploadReceiptToStorage(
 
   // Already a remote web / cloud storage URL
   if (typeof receiptImageSource === 'string' && (receiptImageSource.startsWith('http://') || receiptImageSource.startsWith('https://'))) {
-    return receiptImageSource;
+    return { downloadUrl: receiptImageSource, storagePath: '' };
   }
 
   const cleanBaseName = (fileName || (receiptImageSource instanceof File ? receiptImageSource.name : `receipt_${Date.now()}.jpg`))
@@ -111,7 +111,7 @@ export async function uploadReceiptToStorage(
   const path = `users/${userId}/receipts/${fileId}`;
   const storageRef = ref(storage, path);
 
-  try {
+  const performUpload = async (): Promise<StorageUploadResult> => {
     const { blob, contentType } = await toBlob(receiptImageSource);
 
     const uploadResult = await uploadBytes(storageRef, blob, {
@@ -123,11 +123,16 @@ export async function uploadReceiptToStorage(
     });
 
     const downloadUrl = await getDownloadURL(uploadResult.ref);
-    return downloadUrl;
-  } catch (err: any) {
-    console.error('Firebase Storage upload error:', err);
-    throw new Error(
-      err?.message || 'Gagal mengunggah foto struk ke Firebase Storage'
-    );
-  }
+    return { downloadUrl, storagePath: path };
+  };
+
+  // 7-second timeout safeguard
+  const timeoutPromise = new Promise<StorageUploadResult>((_, reject) => {
+    const timer = setTimeout(() => {
+      clearTimeout(timer);
+      reject(new Error('Batas waktu unggah berkas gambar ke Cloud Storage habis (timeout 7 detik).'));
+    }, 7000);
+  });
+
+  return await Promise.race([performUpload(), timeoutPromise]);
 }

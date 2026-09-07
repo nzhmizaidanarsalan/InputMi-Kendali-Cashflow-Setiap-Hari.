@@ -872,7 +872,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [transactions]);
 
   // Firestore Mutators (Optimistic Local + Cloud Firestore Sync)
-  const addTransaction = async (txData: Omit<Transaction, 'id' | 'createdAt'>) => {
+  const addTransaction = async (txData: Omit<Transaction, 'id' | 'createdAt'>): Promise<Transaction> => {
     // 1. Validate required fields
     if (txData.amount <= 0) {
       showToast('Nominal transaksi harus lebih dari 0.');
@@ -884,32 +884,13 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       throw new Error('Nama transaksi atau merchant wajib diisi.');
     }
 
-    // 2. Receipt upload handling
-    let finalReceiptUrl: string | null = null;
-    let uploadErrorOccurred = false;
+    const isRemoteUrl = Boolean(
+      txData.receiptUrl &&
+      (txData.receiptUrl.startsWith('http://') || txData.receiptUrl.startsWith('https://'))
+    );
+    const hasLocalImage = Boolean(txData.receiptUrl && !isRemoteUrl);
 
-    if (txData.receiptUrl) {
-      if (txData.receiptUrl.startsWith('http://') || txData.receiptUrl.startsWith('https://')) {
-        finalReceiptUrl = txData.receiptUrl;
-      } else if (user) {
-        try {
-          finalReceiptUrl = await uploadReceiptToStorage(
-            user.uid,
-            txData.receiptUrl,
-            txData.receiptFileName || undefined
-          );
-        } catch (uploadErr: any) {
-          console.warn('Storage receipt upload warning:', uploadErr);
-          uploadErrorOccurred = true;
-          showToast('Peringatan: Gagal mengunggah struk ke Cloud. Transaksi disimpan tanpa lampiran foto cloud.');
-          finalReceiptUrl = null;
-        }
-      } else {
-        // User not logged in: preserve local preview
-        finalReceiptUrl = txData.receiptUrl;
-      }
-    }
-
+    // Initial transaction object (core data saved first)
     const newTx: Transaction = {
       id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       type: txData.type,
@@ -920,11 +901,12 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       category: (txData.category || 'Lainnya').trim(),
       paymentMethod: (txData.paymentMethod || 'Tunai').trim(),
       note: txData.note && txData.note.trim() ? txData.note.trim() : null,
-      receiptUrl: finalReceiptUrl, // Explicit null if no receipt, never undefined
+      receiptUrl: isRemoteUrl ? txData.receiptUrl : null,
+      storagePath: null,
       receiptFileName: txData.receiptFileName && txData.receiptFileName.trim() ? txData.receiptFileName.trim() : null,
       receiptFileSize: txData.receiptFileSize && txData.receiptFileSize.trim() ? txData.receiptFileSize.trim() : null,
       items: Array.isArray(txData.items) && txData.items.length > 0 ? txData.items : [],
-      pendingSync: !user || uploadErrorOccurred,
+      pendingSync: false,
       syncError: null,
       createdAt: Date.now(),
     };
@@ -932,26 +914,30 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // 1. Optimistic local state update
     setTransactions((prev) => [newTx, ...prev]);
 
-    // 2. Persist to Firestore if user active
-    if (user) {
+    // 2. Save transaction data to Firestore FIRST if user is active
+    const currentUser = auth.currentUser;
+    if (user && currentUser?.uid) {
       setCloudSyncStatus('syncing');
       try {
         const payload = cleanTransactionForFirestore(newTx);
-        await safeSetDoc(doc(db, 'users', user.uid, 'transactions', newTx.id), payload);
+        await safeSetDoc(doc(db, 'users', currentUser.uid, 'transactions', newTx.id), payload);
         newTx.pendingSync = false;
         newTx.syncError = null;
         setTransactions((prev) => prev.map((item) => (item.id === newTx.id ? { ...newTx } : item)));
-        // Only mark UI as synced once write succeeds
         setCloudSyncStatus('synced');
       } catch (err: any) {
         console.error('Failed to sync new transaction to Firestore:', err);
         newTx.pendingSync = true;
         newTx.syncError = err?.message || 'Gagal menyimpan ke Firestore';
         setTransactions((prev) => prev.map((item) => (item.id === newTx.id ? { ...newTx } : item)));
-        // Show "Gagal Sinkron"
         setCloudSyncStatus('error');
         showToast('Gagal sinkron ke Cloud. Data tersimpan di perangkat.');
       }
+    } else if (user && !currentUser?.uid) {
+      console.warn('Authentication uid missing, saving locally');
+      newTx.pendingSync = true;
+      setCloudSyncStatus('error');
+      showToast('Sesi login tidak valid. Transaksi disimpan di perangkat lokal.');
     } else {
       setCloudSyncStatus('unauthenticated');
     }
@@ -963,7 +949,39 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
     }
 
-    showToast('Transaksi berhasil disimpan.');
+    // 3. If image exists, ATTEMPT Storage upload (decoupled from core save)
+    if (hasLocalImage && user && currentUser?.uid) {
+      try {
+        const uploadResult = await uploadReceiptToStorage(
+          currentUser.uid,
+          txData.receiptUrl!,
+          txData.receiptFileName || undefined
+        );
+
+        const dlUrl = uploadResult.downloadUrl;
+        const sPath = uploadResult.storagePath;
+
+        // 4. If image upload succeeds: update transaction with receiptUrl and storagePath
+        newTx.receiptUrl = dlUrl;
+        newTx.storagePath = sPath;
+
+        await safeUpdateDoc(doc(db, 'users', currentUser.uid, 'transactions', newTx.id), {
+          receiptUrl: dlUrl,
+          storagePath: sPath || null,
+        });
+
+        setTransactions((prev) => prev.map((item) => (item.id === newTx.id ? { ...newTx } : item)));
+      } catch (storageErr: any) {
+        // 5. If image upload fails: KEEP the transaction saved!
+        console.warn('Storage receipt upload failed, but transaction remains saved:', storageErr);
+        showToast('Transaksi berhasil disimpan, tetapi lampiran gambar gagal diunggah.');
+      }
+    } else if (hasLocalImage && (!user || !currentUser?.uid)) {
+      // Local mode: preserve local image preview for this session
+      newTx.receiptUrl = txData.receiptUrl;
+      setTransactions((prev) => prev.map((item) => (item.id === newTx.id ? { ...newTx } : item)));
+    }
+
     return newTx;
   };
 
@@ -973,20 +991,31 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (cleanUpdates.note !== undefined) {
       cleanUpdates.note = cleanUpdates.note && cleanUpdates.note.trim() ? cleanUpdates.note.trim() : null;
     }
-    if (cleanUpdates.receiptUrl !== undefined) {
-      if (!cleanUpdates.receiptUrl) {
+
+    const hasNewLocalImage = Boolean(
+      cleanUpdates.receiptUrl &&
+      cleanUpdates.receiptUrl.startsWith('data:')
+    );
+
+    const currentUser = auth.currentUser;
+    let uploadedReceiptUrl: string | null = null;
+    let uploadedStoragePath: string | null = null;
+
+    if (hasNewLocalImage && user && currentUser?.uid) {
+      try {
+        const uploadRes = await uploadReceiptToStorage(
+          currentUser.uid,
+          cleanUpdates.receiptUrl!,
+          cleanUpdates.receiptFileName || undefined
+        );
+        uploadedReceiptUrl = uploadRes.downloadUrl;
+        uploadedStoragePath = uploadRes.storagePath;
+        cleanUpdates.receiptUrl = uploadedReceiptUrl;
+        cleanUpdates.storagePath = uploadedStoragePath;
+      } catch (uploadErr) {
+        console.warn('Update receipt upload failed, keeping transaction data:', uploadErr);
         cleanUpdates.receiptUrl = null;
-      } else if (cleanUpdates.receiptUrl.startsWith('data:') && user) {
-        try {
-          cleanUpdates.receiptUrl = await uploadReceiptToStorage(
-            user.uid,
-            cleanUpdates.receiptUrl,
-            cleanUpdates.receiptFileName || undefined
-          );
-        } catch (e) {
-          console.warn('Update receipt upload skipped:', e);
-          cleanUpdates.receiptUrl = null;
-        }
+        showToast('Transaksi berhasil diperbarui, tetapi lampiran gambar gagal diunggah.');
       }
     }
 
@@ -994,11 +1023,11 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       prev.map((tx) => (tx.id === id ? { ...tx, ...cleanUpdates } : tx))
     );
 
-    if (user) {
+    if (user && currentUser?.uid) {
       setCloudSyncStatus('syncing');
       try {
         const sanitized = sanitizeForFirestore(cleanUpdates);
-        await safeSetDoc(doc(db, 'users', user.uid, 'transactions', id), sanitized, { merge: true });
+        await safeSetDoc(doc(db, 'users', currentUser.uid, 'transactions', id), sanitized, { merge: true });
         setCloudSyncStatus('synced');
       } catch (err: any) {
         console.error('Failed to update transaction in Firestore:', err);
