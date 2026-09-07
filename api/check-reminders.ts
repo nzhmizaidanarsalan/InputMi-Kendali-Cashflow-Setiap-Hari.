@@ -54,6 +54,12 @@ function validateSubscription(sub: any): { valid: boolean; code?: string; error?
   return { valid: true };
 }
 
+const DEFAULT_VAPID_PUBLIC_KEY =
+  'BEk5RLnA1i1q0LMu4blSJm_idocAdTq_DKHAMv3AFciSFe_VoyiDoQD4KtnO5GscLqZwFrpbyUODkaK6K_56uf4';
+const DEFAULT_VAPID_PRIVATE_KEY =
+  'MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgv1HKui-zr7NKRThMjblkF2KbLVce4FsrSdk7Fg-dWYOhRANCAARJOUS5wNYtatCzLuG5UiZv4naHAHU6vwyhwDL9wBXIkhXv1aMog6EA-CrZzuRrHC6mcBa6W8lDg5Giuiv-ern-';
+const DEFAULT_VAPID_SUBJECT = 'mailto:nazhmizaidan05@gmail.com';
+
 /**
  * Sanitizes and extracts matching 32-byte scalar from PKCS#8 or raw URL-safe Base64 keys
  */
@@ -65,17 +71,24 @@ function getSanitizedVapidConfig(): {
   error?: string;
   code?: string;
 } {
-  let rawPub = process.env.VAPID_PUBLIC_KEY || '';
-  let rawPriv = process.env.VAPID_PRIVATE_KEY || '';
-  let subject = (process.env.VAPID_SUBJECT || 'mailto:support@inputmi.app').trim();
+  let rawPub = process.env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+  let rawPriv = process.env.VAPID_PRIVATE_KEY || DEFAULT_VAPID_PRIVATE_KEY;
+  let subject = (process.env.VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT).trim();
 
   // Strip surrounding quotes, trailing commas, braces, and whitespace
   let cleanPub = rawPub.replace(/^[\"\'\s{]+|[\"\'\s,}]+$/g, '').trim();
   let cleanPriv = rawPriv.replace(/^[\"\'\s{]+|[\"\'\s,}]+$/g, '').trim();
   subject = subject.replace(/^[\"\'\s{]+|[\"\'\s,}]+$/g, '').trim();
 
+  // If environment still has the previous deprecated key, prefer the updated default key pair
+  if (cleanPub.startsWith('BMptIjvg') || cleanPriv.includes('jfvJobsiKmPMn98w9aVg')) {
+    cleanPub = DEFAULT_VAPID_PUBLIC_KEY;
+    cleanPriv = DEFAULT_VAPID_PRIVATE_KEY;
+    subject = DEFAULT_VAPID_SUBJECT;
+  }
+
   if (!subject.startsWith('mailto:') && !subject.startsWith('https://')) {
-    subject = 'mailto:support@inputmi.app';
+    subject = DEFAULT_VAPID_SUBJECT;
   }
 
   if (!cleanPriv) {

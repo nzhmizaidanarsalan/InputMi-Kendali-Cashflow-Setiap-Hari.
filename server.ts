@@ -8,7 +8,7 @@ import pushSubscribeHandler from './api/push-subscribe';
 import checkRemindersHandler from './api/check-reminders';
 import schedulerReminderHandler from './api/scheduler-reminder';
 
-dotenv.config();
+dotenv.config({ override: true });
 
 async function startServer() {
   const app = express();

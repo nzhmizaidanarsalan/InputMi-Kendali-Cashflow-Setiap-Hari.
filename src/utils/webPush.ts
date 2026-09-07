@@ -3,7 +3,7 @@ import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 // Default generated VAPID Public Key fallback
 export const DEFAULT_VAPID_PUBLIC_KEY =
-  'BMptIjvgQvgCz_FIAJwTSsva0CBO8NuTv38W_ZZDDo_AyJ291ger8PUsNXhLCp1l0--CGT5mK8SASHEbd3qTGAw';
+  'BEk5RLnA1i1q0LMu4blSJm_idocAdTq_DKHAMv3AFciSFe_VoyiDoQD4KtnO5GscLqZwFrpbyUODkaK6K_56uf4';
 
 /**
  * Detect if device is running iOS / iPadOS

@@ -5,7 +5,7 @@ export const config = {
 };
 
 const DEFAULT_VAPID_PUBLIC_KEY =
-  'BMptIjvgQvgCz_FIAJwTSsva0CBO8NuTv38W_ZZDDo_AyJ291ger8PUsNXhLCp1l0--CGT5mK8SASHEbd3qTGAw';
+  'BEk5RLnA1i1q0LMu4blSJm_idocAdTq_DKHAMv3AFciSFe_VoyiDoQD4KtnO5GscLqZwFrpbyUODkaK6K_56uf4';
 
 function getSanitizedPublicKey(): { valid: boolean; publicKey: string; error?: string } {
   let rawPub = process.env.VAPID_PUBLIC_KEY || '';
@@ -13,6 +13,12 @@ function getSanitizedPublicKey(): { valid: boolean; publicKey: string; error?: s
 
   let cleanPub = rawPub.replace(/^[\"\'\s{]+|[\"\'\s,}]+$/g, '').trim();
   let cleanPriv = rawPriv.replace(/^[\"\'\s{]+|[\"\'\s,}]+$/g, '').trim();
+
+  // If environment still has the previous deprecated key, prefer the updated default key
+  if (cleanPub.startsWith('BMptIjvg') || cleanPriv.includes('jfvJobsiKmPMn98w9aVg')) {
+    cleanPub = DEFAULT_VAPID_PUBLIC_KEY;
+    cleanPriv = '';
+  }
 
   let derivedPubKey = '';
   if (cleanPriv.length > 64 || cleanPriv.includes('BEGIN PRIVATE KEY')) {
