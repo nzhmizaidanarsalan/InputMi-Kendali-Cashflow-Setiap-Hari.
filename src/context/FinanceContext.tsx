@@ -32,6 +32,8 @@ import { formatNumberIDR } from '../utils/formatters';
 import { filterTransactionsByPeriod } from '../utils/periodUtils';
 import {
   isWebPushSupported,
+  isIOS,
+  isStandalonePWA,
   getNotificationPermission,
   registerServiceWorker,
   subscribeToWebPush,
@@ -821,38 +823,97 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const testSendWebPushReminder = async () => {
+    // Check iOS Safari constraint: Web Push on iOS requires site installed to Home Screen (PWA mode)
+    if (isIOS() && !isStandalonePWA()) {
+      const msg = 'Untuk menerima notifikasi di iPhone, tambahkan InputMi ke Layar Utama lalu aktifkan pengingat dari sana.';
+      showToast(msg);
+      return { success: false, code: 'IOS_PWA_REQUIRED', message: msg };
+    }
+
     if (!isWebPushSupported()) {
       showToast('Browser ini tidak mendukung Web Push.');
-      return { success: false, message: 'Browser tidak mendukung Web Push' };
+      return { success: false, code: 'UNSUPPORTED', message: 'Browser tidak mendukung Web Push' };
     }
+
+    const effectiveUserId = user?.uid || 'guest_user';
+
     try {
-      const reg = await navigator.serviceWorker.getRegistration();
-      const sub = await reg?.pushManager.getSubscription();
+      let reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        reg = await registerServiceWorker();
+      }
+      let sub = await reg?.pushManager.getSubscription();
+
       if (!sub) {
-        showToast('Aktifkan izin notifikasi terlebih dahulu.');
-        return { success: false, message: 'Belum ada langganan push aktif' };
+        const subRes = await subscribeToWebPush(effectiveUserId);
+        if (!subRes.success || !subRes.subscription) {
+          const msg = subRes.error || 'Perangkat belum terdaftar untuk notifikasi.';
+          showToast(msg);
+          return { success: false, code: subRes.code || 'PUSH_SUBSCRIPTION_NOT_FOUND', message: msg };
+        }
+        sub = subRes.subscription;
+        setIsPushSubscribed(true);
       }
 
-      const res = await fetch('/api/check-reminders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user?.uid || 'guest_user',
-          testSend: true,
-          testSubscription: sub.toJSON(),
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Notifikasi uji coba terkirim!');
-        return { success: true, message: data.message };
-      } else {
-        showToast(data.error || 'Gagal mengirim notifikasi.');
-        return { success: false, message: data.error };
+      const sendPushRequest = async (subscriptionObj: any) => {
+        const res = await fetch('/api/check-reminders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: effectiveUserId,
+            testSend: true,
+            testSubscription: typeof subscriptionObj.toJSON === 'function' ? subscriptionObj.toJSON() : subscriptionObj,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        return { res, data };
+      };
+
+      let { res, data } = await sendPushRequest(sub);
+
+      // If key mismatch occurred, transparently re-subscribe and retry once
+      if (!res.ok && (data?.code === 'VAPID_AUTH_FAILED' || data?.code === 'EXPIRED_SUBSCRIPTION')) {
+        console.warn('[WebPush] Refreshing subscription due to server response:', data?.code);
+        const refreshRes = await subscribeToWebPush(effectiveUserId);
+        if (refreshRes.success && refreshRes.subscription) {
+          sub = refreshRes.subscription;
+          setIsPushSubscribed(true);
+          const retry = await sendPushRequest(sub);
+          res = retry.res;
+          data = retry.data;
+        }
       }
+
+      if (res.ok && data?.success) {
+        showToast('Notifikasi uji coba terkirim!');
+        return { success: true, code: 'PUSH_SEND_SUCCESS', message: data.message };
+      }
+
+      // Map specific error codes as required
+      let userMessage = 'Notifikasi gagal dikirim. Silakan coba lagi.';
+      if (data?.code === 'PUSH_SUBSCRIPTION_NOT_FOUND') {
+        userMessage = 'Perangkat belum terdaftar untuk notifikasi.';
+      } else if (data?.code === 'VAPID_CONFIG_INVALID') {
+        userMessage = 'Konfigurasi notifikasi belum valid.';
+      } else if (data?.code === 'EXPIRED_SUBSCRIPTION') {
+        userMessage = 'Langganan notifikasi kedaluwarsa. Aktifkan kembali pengingat.';
+      } else if (data?.code === 'PUSH_SUBSCRIPTION_INVALID') {
+        userMessage = 'Format langganan notifikasi perangkat tidak valid.';
+      } else if (data?.code === 'PUSH_RATE_LIMITED') {
+        userMessage = 'Terlalu banyak permintaan notifikasi. Silakan coba sesaat lagi.';
+      } else if (data?.code === 'IOS_PWA_REQUIRED') {
+        userMessage = 'Untuk menerima notifikasi di iPhone, tambahkan InputMi ke Layar Utama lalu aktifkan pengingat dari sana.';
+      } else if (data?.error) {
+        userMessage = data.error;
+      }
+
+      showToast(userMessage);
+      return { success: false, code: data?.code || 'PUSH_SEND_FAILED', message: userMessage };
     } catch (e: any) {
-      showToast('Gagal memproses notifikasi.');
-      return { success: false, message: e?.message };
+      console.error('[WebPush] Error executing testSendWebPushReminder:', e);
+      const userMessage = 'Notifikasi gagal dikirim. Silakan coba lagi.';
+      showToast(userMessage);
+      return { success: false, code: 'PUSH_SEND_FAILED', message: userMessage };
     }
   };
 

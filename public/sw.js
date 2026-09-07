@@ -1,6 +1,5 @@
 // InputMi Service Worker for Web Push Notifications
 self.addEventListener('install', (event) => {
-  // Activate immediately without waiting
   self.skipWaiting();
 });
 
@@ -12,9 +11,9 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('push', (event) => {
   let data = {
     title: 'Pengingat InputMi',
-    body: 'Ada tagihan yang jatuh tempo. Buka InputMi untuk detail.',
+    body: 'Notifikasi pengingat berhasil diaktifkan.',
     url: '/#balance',
-    tag: 'inputmi-liability-reminder',
+    tag: 'inputmi-reminder',
   };
 
   if (event.data) {
@@ -33,21 +32,15 @@ self.addEventListener('push', (event) => {
 
   // Safe notification options complying with privacy rules
   const options = {
-    body: data.body || 'Ada tagihan yang jatuh tempo. Buka InputMi untuk detail.',
+    body: data.body || 'Notifikasi pengingat berhasil diaktifkan.',
     icon: '/favicon-48x48.png',
     badge: '/favicon.svg',
-    tag: data.tag || 'inputmi-liability-reminder',
+    tag: data.tag || 'inputmi-reminder',
     renotify: true,
     data: {
       url: data.url || '/#balance',
       timestamp: Date.now(),
     },
-    actions: [
-      {
-        action: 'open_app',
-        title: 'Buka InputMi',
-      },
-    ],
   };
 
   event.waitUntil(
@@ -87,7 +80,6 @@ self.addEventListener('pushsubscriptionchange', (event) => {
     self.registration.pushManager
       .subscribe(event.oldSubscription ? event.oldSubscription.options : { userVisibleOnly: true })
       .then((newSubscription) => {
-        // Can post to server
         return fetch('/api/push-subscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

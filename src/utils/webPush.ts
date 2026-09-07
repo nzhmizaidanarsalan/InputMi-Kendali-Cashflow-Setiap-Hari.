@@ -1,16 +1,39 @@
 import { db } from '../lib/firebase';
-import { doc, setDoc, deleteDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 
-// Default generated VAPID Public Key for InputMi
+// Default generated VAPID Public Key fallback
 export const DEFAULT_VAPID_PUBLIC_KEY =
-  'BCO8ctQzOuEy5cjjPOLGmTlFYT6R9DsKVwl-3w-d3oSLxhNGbYgrwBebZbtMj87nCIf1RnlzTg6OZ0zPrrFCik0';
+  'BMptIjvgQvgCz_FIAJwTSsva0CBO8NuTv38W_ZZDDo_AyJ291ger8PUsNXhLCp1l0--CGT5mK8SASHEbd3qTGAw';
 
 /**
- * Convert base64 VAPID public key to Uint8Array for PushManager
+ * Detect if device is running iOS / iPadOS
+ */
+export function isIOS(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  );
+}
+
+/**
+ * Detect if web application is launched in standalone PWA mode (added to Home Screen)
+ */
+export function isStandalonePWA(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    (window.navigator as any).standalone === true
+  );
+}
+
+/**
+ * Convert base64 / base64url VAPID public key to Uint8Array for PushManager
  */
 export function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const clean = base64String.replace(/^[\"\'\s{]+|[\"\'\s,}]+$/g, '').trim();
+  const padding = '='.repeat((4 - (clean.length % 4)) % 4);
+  const base64 = (clean + padding).replace(/-/g, '+').replace(/_/g, '/');
   const rawData = window.atob(base64);
   const outputArray = new Uint8Array(rawData.length);
   for (let i = 0; i < rawData.length; ++i) {
@@ -20,7 +43,7 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
 }
 
 /**
- * Checks whether Web Push and Service Workers are supported in the current environment
+ * Checks whether Web Push and Service Workers are supported in current environment
  */
 export function isWebPushSupported(): boolean {
   return (
@@ -60,7 +83,6 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
  * Creates a unique deterministic doc ID for a subscription endpoint
  */
 export function getSubscriptionDocId(endpoint: string): string {
-  // Use a hash-safe string derived from the end of the endpoint
   try {
     let hash = 0;
     for (let i = 0; i < endpoint.length; i++) {
@@ -79,17 +101,31 @@ export function getSubscriptionDocId(endpoint: string): string {
  */
 export async function subscribeToWebPush(
   userId: string
-): Promise<{ success: boolean; subscription?: PushSubscription; error?: string }> {
+): Promise<{ success: boolean; subscription?: PushSubscription; code?: string; error?: string }> {
+  // 1. Check iOS Safari constraint: Web Push on iOS strictly requires site to be added to Home Screen
+  if (isIOS() && !isStandalonePWA()) {
+    return {
+      success: false,
+      code: 'IOS_PWA_REQUIRED',
+      error: 'Untuk menerima notifikasi di iPhone, tambahkan InputMi ke Layar Utama lalu aktifkan pengingat dari sana.',
+    };
+  }
+
   if (!isWebPushSupported()) {
-    return { success: false, error: 'Browser ini tidak mendukung Web Push Notifications.' };
+    return {
+      success: false,
+      code: 'UNSUPPORTED',
+      error: 'Browser ini tidak mendukung Web Push Notifications.',
+    };
   }
 
   try {
-    // 1. Explicitly request permission
+    // 2. Explicitly request permission
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
       return {
         success: false,
+        code: 'PERMISSION_DENIED',
         error:
           permission === 'denied'
             ? 'Izin notifikasi diblokir pada browser Anda. Aktifkan izin pada pengaturan browser untuk menerima pengingat.'
@@ -97,38 +133,80 @@ export async function subscribeToWebPush(
       };
     }
 
-    // 2. Register / retrieve service worker
+    // 3. Register / retrieve service worker
     let registration = await navigator.serviceWorker.getRegistration();
     if (!registration) {
       registration = await registerServiceWorker();
     }
     if (!registration) {
-      return { success: false, error: 'Gagal mengaktifkan Service Worker.' };
+      return { success: false, code: 'SW_FAILED', error: 'Gagal mengaktifkan Service Worker.' };
     }
 
     await navigator.serviceWorker.ready;
 
-    // 3. Fetch server public key or use default fallback
+    // 4. Fetch server verified public key
     let publicKey = DEFAULT_VAPID_PUBLIC_KEY;
     try {
       const res = await fetch('/api/push-vapid-key');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.publicKey) publicKey = data.publicKey;
+      const data = await res.json();
+      if (data.success && data.publicKey) {
+        publicKey = data.publicKey;
+      } else if (data.code === 'VAPID_CONFIG_INVALID') {
+        return {
+          success: false,
+          code: 'VAPID_CONFIG_INVALID',
+          error: 'Konfigurasi notifikasi belum valid.',
+        };
       }
     } catch (e) {
       // Use fallback
     }
 
-    // 4. Subscribe with PushManager
     const applicationServerKey = urlBase64ToUint8Array(publicKey);
     let subscription = await registration.pushManager.getSubscription();
 
+    // Check if subscription exists with a different or stale applicationServerKey
+    if (subscription) {
+      let needsResubscribe = false;
+      if (subscription.options && subscription.options.applicationServerKey) {
+        const existingKey = new Uint8Array(subscription.options.applicationServerKey);
+        if (
+          existingKey.length !== applicationServerKey.length ||
+          !existingKey.every((val, i) => val === applicationServerKey[i])
+        ) {
+          needsResubscribe = true;
+        }
+      }
+      if (needsResubscribe) {
+        try {
+          await subscription.unsubscribe();
+          subscription = null;
+        } catch (unsubErr) {
+          // Ignore
+        }
+      }
+    }
+
+    // Subscribe with PushManager
     if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey,
-      });
+      try {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey,
+        });
+      } catch (subErr: any) {
+        // If failed due to stale existing key, force clean and retry
+        const existing = await registration.pushManager.getSubscription();
+        if (existing) {
+          await existing.unsubscribe();
+          subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey,
+          });
+        } else {
+          throw subErr;
+        }
+      }
     }
 
     const subJson = subscription.toJSON();
@@ -174,7 +252,11 @@ export async function subscribeToWebPush(
     return { success: true, subscription };
   } catch (err: any) {
     console.error('subscribeToWebPush error:', err);
-    return { success: false, error: err?.message || 'Terjadi kesalahan saat mengaktifkan notifikasi.' };
+    return {
+      success: false,
+      code: 'PUSH_SUBSCRIPTION_FAILED',
+      error: err?.message || 'Terjadi kesalahan saat mengaktifkan notifikasi.',
+    };
   }
 }
 
@@ -221,7 +303,7 @@ export async function unsubscribeFromWebPush(userId: string): Promise<boolean> {
 }
 
 /**
- * Check if the current browser already has an active push subscription
+ * Check if current browser already has an active push subscription
  */
 export async function checkCurrentSubscription(): Promise<boolean> {
   if (!isWebPushSupported()) return false;

@@ -1,9 +1,8 @@
+import { getSanitizedVapidConfig } from './vapidHelper';
+
 export const config = {
   maxDuration: 10,
 };
-
-const DEFAULT_VAPID_PUBLIC_KEY =
-  'BCO8ctQzOuEy5cjjPOLGmTlFYT6R9DsKVwl-3w-d3oSLxhNGbYgrwBebZbtMj87nCIf1RnlzTg6OZ0zPrrFCik0';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -14,6 +13,17 @@ export default async function handler(req: any, res: any) {
     return res.status(200).end();
   }
 
-  const publicKey = process.env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
-  return res.status(200).json({ publicKey });
+  const vapid = getSanitizedVapidConfig();
+  if (!vapid.valid) {
+    return res.status(500).json({
+      success: false,
+      code: 'VAPID_CONFIG_INVALID',
+      error: vapid.error || 'VAPID configuration is invalid on server',
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    publicKey: vapid.publicKey,
+  });
 }
