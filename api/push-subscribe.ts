@@ -1,8 +1,25 @@
-import { validateSubscription } from './vapidHelper';
-
 export const config = {
   maxDuration: 15,
 };
+
+function validateSubscription(sub: any): { valid: boolean; code?: string; error?: string } {
+  if (!sub || typeof sub !== 'object') {
+    return { valid: false, code: 'PUSH_SUBSCRIPTION_INVALID', error: 'Push subscription object is missing' };
+  }
+  if (!sub.endpoint || typeof sub.endpoint !== 'string' || !sub.endpoint.startsWith('https://')) {
+    return { valid: false, code: 'PUSH_SUBSCRIPTION_INVALID', error: 'Invalid or missing push endpoint' };
+  }
+  if (!sub.keys || typeof sub.keys !== 'object') {
+    return { valid: false, code: 'PUSH_SUBSCRIPTION_INVALID', error: 'Subscription keys missing' };
+  }
+  if (!sub.keys.p256dh || typeof sub.keys.p256dh !== 'string' || sub.keys.p256dh.trim() === '') {
+    return { valid: false, code: 'PUSH_SUBSCRIPTION_INVALID', error: 'Subscription keys.p256dh is missing' };
+  }
+  if (!sub.keys.auth || typeof sub.keys.auth !== 'string' || sub.keys.auth.trim() === '') {
+    return { valid: false, code: 'PUSH_SUBSCRIPTION_INVALID', error: 'Subscription keys.auth is missing' };
+  }
+  return { valid: true };
+}
 
 // In-memory server-side registry fallback for runtime instances
 const serverSubscriptionsRegistry = new Map<string, Map<string, any>>();
