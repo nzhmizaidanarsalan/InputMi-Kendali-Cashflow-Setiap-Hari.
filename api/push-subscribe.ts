@@ -91,7 +91,7 @@ export default async function handler(req: any, res: any) {
       serverSubscriptionsRegistry.set(userId, userMap);
     }
 
-    userMap.set(subId, {
+    const subRecord = {
       id: subId,
       userId,
       endpoint: subscription.endpoint,
@@ -101,7 +101,29 @@ export default async function handler(req: any, res: any) {
       },
       updatedAt: Date.now(),
       active: true,
-    });
+    };
+
+    userMap.set(subId, subRecord);
+
+    // Persist to server firestore store file
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const storePath = path.join(process.cwd(), 'data', 'server_firestore_store.json');
+      let store: any = { users: {} };
+      if (fs.existsSync(storePath)) {
+        store = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+      }
+      if (!store.users) store.users = {};
+      if (!store.users[userId]) store.users[userId] = { liabilities: {}, pushSubscriptions: {} };
+      if (!store.users[userId].pushSubscriptions) store.users[userId].pushSubscriptions = {};
+      store.users[userId].pushSubscriptions[subId] = subRecord;
+      const dir = path.dirname(storePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), 'utf8');
+    } catch (e) {
+      // Non-blocking persistence
+    }
 
     return res.status(200).json({
       success: true,

@@ -1,0 +1,41 @@
+{
+  "users": {
+    "user_real_test_01": {
+      "profile": {
+        "uid": "user_real_test_01",
+        "email": "nazhmizaidan05@gmail.com",
+        "displayName": "Nazhmi Zaidan"
+      },
+      "liabilities": {
+        "liab_real_due_today": {
+          "id": "liab_real_due_today",
+          "name": "Kewajiban Tagihan Listrik & Internet",
+          "category": "Utilitas",
+          "totalRemaining": 375000,
+          "dueDate": "2026-09-08",
+          "reminderState": {
+            "h3Sent": false,
+            "h1Sent": false,
+            "dueDateSent": true,
+            "lastEvaluatedDueDate": "2026-09-08",
+            "updatedAt": 1788832444062
+          },
+          "updatedAt": 1788832444838
+        }
+      },
+      "pushSubscriptions": {
+        "sub_device_01": {
+          "id": "sub_device_01",
+          "userId": "user_real_test_01",
+          "endpoint": "https://localhost:8443/push/v1/devices/fcm-ios-token",
+          "keys": {
+            "p256dh": "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM",
+            "auth": "tBHItJI5svbpez7KI4CCXg"
+          },
+          "updatedAt": 1788832443059,
+          "active": true
+        }
+      }
+    }
+  }
+}
