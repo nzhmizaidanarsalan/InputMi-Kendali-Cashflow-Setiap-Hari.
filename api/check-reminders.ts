@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import webpushDefault from 'web-push';
+import { normalizeLiabilityDueDate } from './scheduler-reminder';
 
 export const config = {
   maxDuration: 30,
@@ -237,26 +238,33 @@ function evaluateLiabilityReminder(
     return { shouldSend: false, reason: 'liability_settled_or_paid' };
   }
 
-  const parsedDue = parseLiabilityDueDate(liability.dueDate);
-  if (!parsedDue) {
+  const todayStr = customTodayDateStr || getJakartaToday().dateString;
+  const rawDueDate =
+    liability.dueDate !== undefined
+      ? liability.dueDate
+      : (liability as any).due_date !== undefined
+      ? (liability as any).due_date
+      : (liability as any).deadline;
+
+  const parsedDue = normalizeLiabilityDueDate(rawDueDate, todayStr);
+  if (!parsedDue || !parsedDue.normalizedDate) {
     return { shouldSend: false, reason: 'invalid_due_date_format' };
   }
 
-  const todayStr = customTodayDateStr || getJakartaToday().dateString;
-  const diffDays = getCalendarDayDifference(todayStr, parsedDue.dateString);
+  const diffDays = getCalendarDayDifference(todayStr, parsedDue.normalizedDate);
 
   let state = liability.reminderState ? { ...liability.reminderState } : {};
 
-  if (state.lastEvaluatedDueDate && state.lastEvaluatedDueDate !== parsedDue.dateString) {
+  if (state.lastEvaluatedDueDate && state.lastEvaluatedDueDate !== parsedDue.normalizedDate) {
     state = {
       h3Sent: false,
       h1Sent: false,
       dueDateSent: false,
-      lastEvaluatedDueDate: parsedDue.dateString,
+      lastEvaluatedDueDate: parsedDue.normalizedDate,
       updatedAt: Date.now(),
     };
   } else if (!state.lastEvaluatedDueDate) {
-    state.lastEvaluatedDueDate = parsedDue.dateString;
+    state.lastEvaluatedDueDate = parsedDue.normalizedDate;
   }
 
   if (diffDays === 3) {
@@ -272,7 +280,7 @@ function evaluateLiabilityReminder(
       newReminderState: {
         ...state,
         h3Sent: true,
-        lastEvaluatedDueDate: parsedDue.dateString,
+        lastEvaluatedDueDate: parsedDue.normalizedDate,
         updatedAt: Date.now(),
       },
     };
@@ -291,7 +299,7 @@ function evaluateLiabilityReminder(
       newReminderState: {
         ...state,
         h1Sent: true,
-        lastEvaluatedDueDate: parsedDue.dateString,
+        lastEvaluatedDueDate: parsedDue.normalizedDate,
         updatedAt: Date.now(),
       },
     };
@@ -310,7 +318,7 @@ function evaluateLiabilityReminder(
       newReminderState: {
         ...state,
         dueDateSent: true,
-        lastEvaluatedDueDate: parsedDue.dateString,
+        lastEvaluatedDueDate: parsedDue.normalizedDate,
         updatedAt: Date.now(),
       },
     };

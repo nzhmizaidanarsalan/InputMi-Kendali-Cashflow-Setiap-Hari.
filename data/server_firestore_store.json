@@ -12,12 +12,12 @@
           "name": "Kewajiban Tagihan Listrik & Internet",
           "category": "Utilitas",
           "totalRemaining": 375000,
-          "dueDate": "2026-09-08",
+          "dueDate": "2026-09-09",
           "reminderState": {
             "h3Sent": false,
             "h1Sent": false,
-            "dueDateSent": true,
-            "lastEvaluatedDueDate": "2026-09-08",
+            "dueDateSent": false,
+            "lastEvaluatedDueDate": "2026-09-09",
             "updatedAt": 1788834024904
           },
           "updatedAt": 1788834025154

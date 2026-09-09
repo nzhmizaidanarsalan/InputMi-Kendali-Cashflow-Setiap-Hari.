@@ -129,15 +129,236 @@ function getJakartaTodayString(date: Date = new Date()): string {
   return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
 }
 
-function parseLiabilityDueDate(dateStr?: string): { dateString: string } | null {
-  if (!dateStr || typeof dateStr !== 'string') return null;
-  const trimmed = dateStr.trim();
-  const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (!match) return null;
-  const year = match[1];
-  const month = match[2].padStart(2, '0');
-  const day = match[3].padStart(2, '0');
-  return { dateString: `${year}-${month}-${day}` };
+const INDO_ENG_MONTHS: Record<string, number> = {
+  januari: 1, january: 1, jan: 1,
+  februari: 2, february: 2, feb: 2,
+  maret: 3, march: 3, mar: 3,
+  april: 4, apr: 4,
+  mei: 5, may: 5,
+  juni: 6, june: 6, jun: 6,
+  juli: 7, july: 7, jul: 7,
+  agustus: 8, august: 8, agu: 8, ags: 8, agt: 8, aug: 8,
+  september: 9, sept: 9, sep: 9,
+  oktober: 10, october: 10, okt: 10, oct: 10,
+  november: 11, nop: 11, nov: 11,
+  desember: 12, december: 12, des: 12, dec: 12,
+};
+
+export interface NormalizedDueDateResult {
+  normalizedDate: string; // "YYYY-MM-DD"
+  rawType: string;
+  rawPreview: string;
+  error?: string;
+}
+
+export function normalizeLiabilityDueDate(
+  rawValue: any,
+  refTodayJakarta?: string
+): NormalizedDueDateResult | null {
+  if (rawValue === null || rawValue === undefined) {
+    return null;
+  }
+
+  const refToday = refTodayJakarta || getJakartaTodayString();
+  const [refYearStr, refMonthStr] = refToday.split('-');
+  const refYear = parseInt(refYearStr, 10) || 2026;
+  const refMonth = parseInt(refMonthStr, 10) || 9;
+
+  // 1. Check for Firestore Timestamp or Date instance
+  if (rawValue instanceof Date) {
+    return {
+      normalizedDate: rawValue.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }),
+      rawType: 'Date',
+      rawPreview: rawValue.toISOString(),
+    };
+  }
+
+  if (typeof rawValue.toDate === 'function') {
+    try {
+      const d = rawValue.toDate();
+      if (d instanceof Date && !isNaN(d.getTime())) {
+        return {
+          normalizedDate: d.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }),
+          rawType: 'Firestore Timestamp',
+          rawPreview: d.toISOString(),
+        };
+      }
+    } catch (e) {}
+  }
+
+  if (typeof rawValue === 'object' && ('_seconds' in rawValue || 'seconds' in rawValue)) {
+    const sec = typeof rawValue.seconds === 'number' ? rawValue.seconds : rawValue._seconds;
+    const nsec = typeof rawValue.nanoseconds === 'number' ? rawValue.nanoseconds : (rawValue._nanoseconds || 0);
+    if (typeof sec === 'number' && !isNaN(sec)) {
+      const d = new Date(sec * 1000 + nsec / 1e6);
+      return {
+        normalizedDate: d.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }),
+        rawType: 'Firestore Timestamp',
+        rawPreview: `seconds:${sec}`,
+      };
+    }
+  }
+
+  // 2. Numeric milliseconds or seconds
+  if (typeof rawValue === 'number' && !isNaN(rawValue)) {
+    if (rawValue > 1e11) {
+      const d = new Date(rawValue);
+      return {
+        normalizedDate: d.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }),
+        rawType: 'numeric milliseconds',
+        rawPreview: String(rawValue),
+      };
+    } else if (rawValue > 1e8) {
+      const d = new Date(rawValue * 1000);
+      return {
+        normalizedDate: d.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }),
+        rawType: 'numeric seconds',
+        rawPreview: String(rawValue),
+      };
+    } else if (rawValue >= 1 && rawValue <= 31) {
+      const day = String(Math.floor(rawValue)).padStart(2, '0');
+      const month = String(refMonth).padStart(2, '0');
+      return {
+        normalizedDate: `${refYear}-${month}-${day}`,
+        rawType: 'numeric day of month',
+        rawPreview: String(rawValue),
+      };
+    }
+  }
+
+  // 3. String formats
+  if (typeof rawValue === 'string') {
+    const str = rawValue.trim();
+    if (!str) return null;
+
+    const rawPreview = str.length > 50 ? str.slice(0, 50) + '...' : str;
+
+    // 3a. Calendar date YYYY-MM-DD (check this before generic ISO so timezone offset doesn't shift pure calendar date)
+    const pureIsoMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (pureIsoMatch) {
+      const y = parseInt(pureIsoMatch[1], 10);
+      const m = parseInt(pureIsoMatch[2], 10);
+      const d = parseInt(pureIsoMatch[3], 10);
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        return {
+          normalizedDate: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+          rawType: 'YYYY-MM-DD string',
+          rawPreview,
+        };
+      }
+    }
+
+    // 3b. ISO format with time (e.g. 2026-09-09T00:00:00.000Z or 2026-09-09T17:00:00Z)
+    if (str.includes('T') || str.endsWith('Z')) {
+      const parsedD = new Date(str);
+      if (!isNaN(parsedD.getTime())) {
+        return {
+          normalizedDate: parsedD.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }),
+          rawType: 'ISO datetime string',
+          rawPreview,
+        };
+      }
+    }
+
+    // 3c. Numeric DMY format: DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY
+    const dmyNumMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (dmyNumMatch) {
+      const d = parseInt(dmyNumMatch[1], 10);
+      const m = parseInt(dmyNumMatch[2], 10);
+      const y = parseInt(dmyNumMatch[3], 10);
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        return {
+          normalizedDate: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+          rawType: 'localized date string',
+          rawPreview,
+        };
+      }
+    }
+
+    // 3d. Localized Day Month Year: e.g. '9 Sep 2026', '09 September 2026', '9-Sep-2026'
+    const dayFirstMatch = str.match(/^(\d{1,2})[\s\-_/.,]+([a-zA-Z]+)(?:[\s\-_/.,]+(\d{4}|\d{2}))?/);
+    if (dayFirstMatch) {
+      const day = parseInt(dayFirstMatch[1], 10);
+      const monthWord = dayFirstMatch[2].toLowerCase();
+      let year = dayFirstMatch[3] ? parseInt(dayFirstMatch[3], 10) : refYear;
+      if (year < 100) year += 2000;
+
+      let month: number | undefined;
+      for (const [key, val] of Object.entries(INDO_ENG_MONTHS)) {
+        if (monthWord === key || monthWord.startsWith(key)) {
+          month = val;
+          break;
+        }
+      }
+
+      if (month && day >= 1 && day <= 31) {
+        return {
+          normalizedDate: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+          rawType: 'localized date string',
+          rawPreview,
+        };
+      }
+    }
+
+    // 3e. Localized Month Day Year: e.g. 'Sep 9, 2026', 'September 9 2026'
+    const monthFirstMatch = str.match(/^([a-zA-Z]+)[\s\-_/.,]+(\d{1,2})(?:[,\s\-_/.]+([0-9]{4}|[0-9]{2}))?/);
+    if (monthFirstMatch) {
+      const monthWord = monthFirstMatch[1].toLowerCase();
+      const day = parseInt(monthFirstMatch[2], 10);
+      let year = monthFirstMatch[3] ? parseInt(monthFirstMatch[3], 10) : refYear;
+      if (year < 100) year += 2000;
+
+      let month: number | undefined;
+      for (const [key, val] of Object.entries(INDO_ENG_MONTHS)) {
+        if (monthWord === key || monthWord.startsWith(key)) {
+          month = val;
+          break;
+        }
+      }
+
+      if (month && day >= 1 && day <= 31) {
+        return {
+          normalizedDate: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+          rawType: 'localized date string',
+          rawPreview,
+        };
+      }
+    }
+
+    // 3f. 'Akhir Bulan' or contains 'akhir'
+    if (str.toLowerCase().includes('akhir')) {
+      const lastDay = new Date(Date.UTC(refYear, refMonth, 0)).getUTCDate();
+      return {
+        normalizedDate: `${refYear}-${String(refMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`,
+        rawType: 'localized date string',
+        rawPreview,
+      };
+    }
+
+    // 3g. Fallback native Date parsing
+    const fallbackD = new Date(str);
+    if (!isNaN(fallbackD.getTime()) && fallbackD.getFullYear() > 2000) {
+      return {
+        normalizedDate: fallbackD.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }),
+        rawType: 'ISO datetime string',
+        rawPreview,
+      };
+    }
+
+    return {
+      normalizedDate: '',
+      rawType: 'unsupported_string',
+      rawPreview,
+      error: 'UNSUPPORTED_DATE_STRING',
+    };
+  }
+
+  return {
+    normalizedDate: '',
+    rawType: typeof rawValue,
+    rawPreview: String(rawValue),
+    error: 'UNSUPPORTED_DATE_TYPE',
+  };
 }
 
 function getCalendarDayDifference(startDateStr: string, endDateStr: string): number {
@@ -507,11 +728,28 @@ export default async function handler(req: any, res: any) {
   let noSubscriptionSkipped = 0;
   let invalidSubscriptionSkipped = 0;
   let paidSkipped = 0;
+  let pastDueSkipped = 0;
+  let notDueYetSkipped = 0;
   let stateMismatchSkipped = 0;
+
+  const allLiabilitiesDiagnostics: Array<{
+    liabilityId: string;
+    rawDueDateType: string;
+    rawDueDatePreview: string;
+    normalizedDueDate: string | null;
+    todayJakarta: string;
+    daysUntilDue: number | null;
+    reminderStage: string;
+    skipReason: string | null;
+  }> = [];
 
   const dueLiabilitiesTrace: Array<{
     userId: string;
     liabilityId: string;
+    rawDueDateType: string;
+    rawDueDatePreview: string;
+    normalizedDueDate: string;
+    todayJakarta: string;
     reminderStage: string;
     dueDate: string;
     daysUntilDue: number;
@@ -553,26 +791,71 @@ export default async function handler(req: any, res: any) {
       const isPaid = liability.status === 'paid' || liability.isPaid === true;
       if (isNaN(remaining) || remaining <= 0 || isPaid) {
         paidSkipped++;
+        allLiabilitiesDiagnostics.push({
+          liabilityId: liability.id,
+          rawDueDateType: typeof liability.dueDate,
+          rawDueDatePreview: String(liability.dueDate || ''),
+          normalizedDueDate: null,
+          todayJakarta,
+          daysUntilDue: null,
+          reminderStage: 'none',
+          skipReason: 'PAID',
+        });
         continue;
       }
       activeLiabilities++;
 
-      const parsedDue = parseLiabilityDueDate(liability.dueDate);
-      if (!parsedDue) {
+      const rawDueDate =
+        liability.dueDate !== undefined
+          ? liability.dueDate
+          : liability.due_date !== undefined
+          ? liability.due_date
+          : liability.deadline !== undefined
+          ? liability.deadline
+          : liability.tanggalJatuhTempo;
+
+      const normResult = normalizeLiabilityDueDate(rawDueDate, todayJakarta);
+      if (!normResult || !normResult.normalizedDate) {
         stateMismatchSkipped++;
+        const failReason =
+          rawDueDate === undefined || rawDueDate === null
+            ? 'INVALID_DUE_DATE'
+            : normResult?.error || 'DATE_NORMALIZATION_FAILED';
+
+        const safeDiag = {
+          liabilityId: liability.id,
+          rawDueDateType: normResult ? normResult.rawType : typeof rawDueDate,
+          rawDueDatePreview: normResult ? normResult.rawPreview : String(rawDueDate || ''),
+          normalizedDueDate: null,
+          todayJakarta,
+          daysUntilDue: null,
+          reminderStage: 'none',
+          skipReason: failReason,
+        };
+        allLiabilitiesDiagnostics.push(safeDiag);
+        console.log('[Scheduler] Safe liability diagnostic:', safeDiag);
         continue;
       }
 
-      const diffDays = getCalendarDayDifference(todayJakarta, parsedDue.dateString);
+      const diffDays = getCalendarDayDifference(todayJakarta, normResult.normalizedDate);
       let state = liability.reminderState ? { ...liability.reminderState } : {};
+      const rawLastEvaluated = state.lastEvaluatedDueDate;
 
-      // Reset state if due date changed
-      if (state.lastEvaluatedDueDate && state.lastEvaluatedDueDate !== parsedDue.dateString) {
+      // Normalize lastEvaluatedDueDate if present
+      let normalizedLastEvaluated: string | null = null;
+      if (rawLastEvaluated) {
+        const normLast = normalizeLiabilityDueDate(rawLastEvaluated, todayJakarta);
+        normalizedLastEvaluated = normLast?.normalizedDate || String(rawLastEvaluated).trim();
+      }
+
+      // If lastEvaluatedDueDate is missing or differs from current normalized due date:
+      // Do not block reminder matching and do not let stale flags from previous test dates suppress a new valid due date.
+      if (!normalizedLastEvaluated || normalizedLastEvaluated !== normResult.normalizedDate) {
         state = {
           h3Sent: false,
           h1Sent: false,
           dueDateSent: false,
-          lastEvaluatedDueDate: parsedDue.dateString,
+          lastEvaluatedDueDate: normResult.normalizedDate,
           updatedAt: Date.now(),
         };
       }
@@ -582,6 +865,7 @@ export default async function handler(req: any, res: any) {
       let alreadySent = false;
       let stageTitle = '';
       let stageBody = '';
+      let skipReason: string | null = null;
 
       if (diffDays === 0) {
         todayDue++;
@@ -601,38 +885,59 @@ export default async function handler(req: any, res: any) {
         alreadySent = !!state.h3Sent;
         stageTitle = 'Pengingat Jatuh Tempo 3 Hari Lagi';
         stageBody = `Kewajiban "${liability.name || 'Tagihan'}" jatuh tempo dalam 3 hari (H-3).`;
+      } else if (diffDays < 0) {
+        skipReason = 'PAST_DUE';
+        pastDueSkipped++;
+      } else {
+        skipReason = 'REMINDER_STAGE_NOT_MATCHED';
+        notDueYetSkipped++;
       }
 
-      if (!stage) {
-        // Not in reminder stage window
-        continue;
-      }
+      if (stage) {
+        // This liability is due: track subscriptions available specifically for this user
+        subscriptionsFoundForDueUsers += validSubsForUser.length;
 
-      // This liability is due: track subscriptions available specifically for this user
-      subscriptionsFoundForDueUsers += validSubsForUser.length;
-
-      let skipReason: string | null = null;
-      if (alreadySent) {
-        skipReason = 'ALREADY_SENT';
-        alreadySentSkipped++;
-      } else if (validSubsForUser.length === 0) {
-        skipReason = 'NO_ACTIVE_SUBSCRIPTION';
-        noSubscriptionSkipped++;
+        if (alreadySent) {
+          skipReason = 'ALREADY_SENT';
+          alreadySentSkipped++;
+        } else if (validSubsForUser.length === 0) {
+          skipReason = 'NO_ACTIVE_SUBSCRIPTION';
+          noSubscriptionSkipped++;
+        }
       }
 
       // Record safe diagnostic trace (no financial amounts or names)
-      dueLiabilitiesTrace.push({
-        userId: user.userId,
+      const safeDiag = {
         liabilityId: liability.id,
-        reminderStage: stage,
-        dueDate: parsedDue.dateString,
+        rawDueDateType: normResult.rawType,
+        rawDueDatePreview: normResult.rawPreview,
+        normalizedDueDate: normResult.normalizedDate,
+        todayJakarta,
         daysUntilDue: diffDays,
-        h3Sent: !!state.h3Sent,
-        h1Sent: !!state.h1Sent,
-        dueDateSent: !!state.dueDateSent,
-        subscriptionCountForThisUser: validSubsForUser.length,
+        reminderStage: stage || 'none',
         skipReason,
-      });
+      };
+      allLiabilitiesDiagnostics.push(safeDiag);
+      console.log('[Scheduler] Safe liability diagnostic:', safeDiag);
+
+      if (stage) {
+        dueLiabilitiesTrace.push({
+          userId: user.userId,
+          liabilityId: liability.id,
+          rawDueDateType: normResult.rawType,
+          rawDueDatePreview: normResult.rawPreview,
+          normalizedDueDate: normResult.normalizedDate,
+          todayJakarta,
+          reminderStage: stage,
+          dueDate: normResult.normalizedDate,
+          daysUntilDue: diffDays,
+          h3Sent: !!state.h3Sent,
+          h1Sent: !!state.h1Sent,
+          dueDateSent: !!state.dueDateSent,
+          subscriptionCountForThisUser: validSubsForUser.length,
+          skipReason,
+        });
+      }
 
       // If eligible, dispatch push notifications to this user's subscriptions only
       if (!skipReason && validSubsForUser.length > 0) {
@@ -646,7 +951,7 @@ export default async function handler(req: any, res: any) {
             url: '/balance',
             liabilityId: liability.id,
             stage,
-            dueDate: parsedDue.dateString,
+            dueDate: normResult.normalizedDate,
           },
         });
 
@@ -684,7 +989,7 @@ export default async function handler(req: any, res: any) {
             h3Sent: stage === 'h3' ? true : !!state.h3Sent,
             h1Sent: stage === 'h1' ? true : !!state.h1Sent,
             dueDateSent: stage === 'dueDate' ? true : !!state.dueDateSent,
-            lastEvaluatedDueDate: parsedDue.dateString,
+            lastEvaluatedDueDate: normResult.normalizedDate,
             updatedAt: Date.now(),
           };
 
@@ -714,8 +1019,11 @@ export default async function handler(req: any, res: any) {
     noSubscriptionSkipped,
     invalidSubscriptionSkipped,
     paidSkipped,
+    pastDueSkipped,
+    notDueYetSkipped,
     stateMismatchSkipped,
     dueLiabilitiesTrace,
+    liabilitiesDiagnostic: allLiabilitiesDiagnostics,
   };
 
   console.log('[Scheduler] Diagnostic run output:', diagnosticResponse);
