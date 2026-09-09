@@ -227,7 +227,15 @@ function getFirebaseAdminDb(): any {
   }
 }
 
-// Persistent server store path: data/server_firestore_store.json
+function isProduction(): boolean {
+  return (
+    process.env.VERCEL === '1' ||
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.VERCEL_ENV)
+  );
+}
+
+// Local dev persistent server store path: data/server_firestore_store.json
 function getLocalStorePath(): string {
   return path.join(process.cwd(), 'data', 'server_firestore_store.json');
 }
@@ -264,92 +272,89 @@ interface UserData {
   pushSubscriptions: any[];
 }
 
-async function loadAllUserData(): Promise<{ users: UserData[]; source: string }> {
-  const usersMap = new Map<string, UserData>();
-  let source = 'server_persistent_store';
-
-  // 1. Try Firebase Admin Firestore
-  const adminDb = getFirebaseAdminDb();
-  if (adminDb) {
-    try {
-      const usersSnap = await adminDb.collection('users').get();
-      if (usersSnap && usersSnap.docs && usersSnap.docs.length > 0) {
-        source = 'firebase_admin_firestore';
-        for (const userDoc of usersSnap.docs) {
-          const userId = userDoc.id;
-          const liabSnap = await adminDb
-            .collection('users')
-            .doc(userId)
-            .collection('liabilities')
-            .get();
-          const subSnap = await adminDb
-            .collection('users')
-            .doc(userId)
-            .collection('pushSubscriptions')
-            .get();
-
-          const liabilities = liabSnap.docs.map((d: any) => ({
-            id: d.id,
-            ...d.data(),
-          }));
-
-          const pushSubscriptions = subSnap.docs.map((d: any) => ({
-            id: d.id,
-            ...d.data(),
-          }));
-
-          usersMap.set(userId, {
-            userId,
-            liabilities,
-            pushSubscriptions,
-          });
-        }
-      }
-    } catch (err: any) {
-      console.warn('[Scheduler] Firebase Admin query note (using persistent server store):', err?.message);
-    }
-  }
-
-  // 2. Also read and merge local persistent store (exact Firestore collection schema)
-  const localStore = readLocalStore();
-  if (localStore.users) {
+function parseLocalStoreUsers(localStore: any): UserData[] {
+  const users: UserData[] = [];
+  if (localStore?.users) {
     for (const [userId, uData] of Object.entries<any>(localStore.users)) {
-      const existing = usersMap.get(userId);
-      const localLiabs: any[] = Object.values(uData.liabilities || {});
-      const localSubs: any[] = Object.values(uData.pushSubscriptions || {});
-
-      if (!existing) {
-        usersMap.set(userId, {
-          userId,
-          liabilities: localLiabs,
-          pushSubscriptions: localSubs,
-        });
-      } else {
-        // Merge missing liabilities
-        for (const l of localLiabs) {
-          if (!existing.liabilities.some((x) => x.id === l.id)) {
-            existing.liabilities.push(l);
-          }
-        }
-        // Merge missing subscriptions
-        for (const s of localSubs) {
-          if (!existing.pushSubscriptions.some((x) => x.endpoint === s.endpoint)) {
-            existing.pushSubscriptions.push(s);
-          }
-        }
-      }
+      users.push({
+        userId,
+        liabilities: Object.values(uData.liabilities || {}),
+        pushSubscriptions: Object.values(uData.pushSubscriptions || {}),
+      });
     }
   }
+  return users;
+}
 
-  return { users: Array.from(usersMap.values()), source };
+async function loadAllUserData(isProd: boolean): Promise<{ users: UserData[]; source: string }> {
+  const adminDb = getFirebaseAdminDb();
+  if (!adminDb) {
+    if (isProd) {
+      throw new Error(
+        'Firebase Admin Firestore failed to initialize in production. Check FIREBASE_SERVICE_ACCOUNT or Application Default Credentials.'
+      );
+    }
+    console.warn('[Scheduler] Firebase Admin unavailable in local dev. Using local store fallback.');
+    const localStore = readLocalStore();
+    return { users: parseLocalStoreUsers(localStore), source: 'local_dev_store' };
+  }
+
+  try {
+    const usersMap = new Map<string, UserData>();
+    const usersSnap = await adminDb.collection('users').get();
+    
+    for (const userDoc of usersSnap.docs) {
+      const userId = userDoc.id;
+      const liabSnap = await adminDb
+        .collection('users')
+        .doc(userId)
+        .collection('liabilities')
+        .get();
+      const subSnap = await adminDb
+        .collection('users')
+        .doc(userId)
+        .collection('pushSubscriptions')
+        .get();
+
+      const liabilities = liabSnap.docs.map((d: any) => ({
+        id: d.id,
+        ...d.data(),
+      }));
+
+      const pushSubscriptions = subSnap.docs.map((d: any) => ({
+        id: d.id,
+        ...d.data(),
+      }));
+
+      usersMap.set(userId, {
+        userId,
+        liabilities,
+        pushSubscriptions,
+      });
+    }
+
+    return {
+      users: Array.from(usersMap.values()),
+      source: 'firebase_admin_firestore',
+    };
+  } catch (err: any) {
+    if (isProd) {
+      throw new Error(
+        `Firebase Admin Firestore query failed in production: ${err?.message || err}`
+      );
+    }
+    console.warn('[Scheduler] Firestore query failed in local dev, checking local store:', err?.message);
+    const localStore = readLocalStore();
+    return { users: parseLocalStoreUsers(localStore), source: 'local_dev_store' };
+  }
 }
 
 async function updateLiabilityReminderState(
   userId: string,
   liabilityId: string,
-  newState: any
+  newState: any,
+  isProd: boolean
 ): Promise<void> {
-  // Update in Firebase Admin if available
   const adminDb = getFirebaseAdminDb();
   if (adminDb) {
     try {
@@ -362,12 +367,24 @@ async function updateLiabilityReminderState(
           reminderState: newState,
           updatedAt: new Date().toISOString(),
         });
+      return;
     } catch (e: any) {
-      console.warn('[Scheduler] Firebase Admin update note:', e?.message);
+      if (isProd) {
+        throw new Error(
+          `Failed to update reminderState in Firestore in production: ${e?.message || e}`
+        );
+      }
+      console.warn('[Scheduler] Firebase Admin update note in local dev:', e?.message);
     }
   }
 
-  // Update in local persistent store
+  if (isProd) {
+    throw new Error(
+      'Cannot update reminderState: Firebase Admin Firestore is not available in production.'
+    );
+  }
+
+  // Local development / test fallback ONLY (never executed in production)
   const localStore = readLocalStore();
   if (
     localStore.users &&
@@ -414,9 +431,63 @@ export default async function handler(req: any, res: any) {
   }
 
   const todayJakarta = getJakartaTodayString();
+  const prodMode = isProduction();
+
+  // Support resetting the dummy test liability for clean verification if requested
+  const shouldResetTest =
+    req.query?.resetTestLiability === 'true' || req.body?.resetTestLiability === true;
+  if (shouldResetTest) {
+    const adminDb = getFirebaseAdminDb();
+    if (adminDb) {
+      try {
+        await adminDb
+          .collection('users')
+          .doc('user_real_test_01')
+          .collection('liabilities')
+          .doc('liab_real_due_today')
+          .update({
+            'reminderState.dueDateSent': false,
+            'reminderState.h1Sent': false,
+            'reminderState.h3Sent': false,
+            'reminderState.lastEvaluatedDueDate': todayJakarta,
+            'reminderState.updatedAt': Date.now(),
+          });
+        console.log('[Scheduler] Safely reset dummy test liability in Firestore.');
+      } catch (e) {
+        // Doc might not exist in production Firestore
+      }
+    }
+    if (!prodMode) {
+      const store = readLocalStore();
+      if (store.users?.user_real_test_01?.liabilities?.liab_real_due_today) {
+        store.users.user_real_test_01.liabilities.liab_real_due_today.reminderState = {
+          h3Sent: false,
+          h1Sent: false,
+          dueDateSent: false,
+          lastEvaluatedDueDate: todayJakarta,
+          updatedAt: Date.now(),
+        };
+        writeLocalStore(store);
+        console.log('[Scheduler] Safely reset dummy test liability in local store.');
+      }
+    }
+  }
 
   // Load users, liabilities, and push subscriptions from server-side Firestore
-  const { users, source } = await loadAllUserData();
+  let users: UserData[] = [];
+  let source = 'firebase_admin_firestore';
+  try {
+    const loaded = await loadAllUserData(prodMode);
+    users = loaded.users;
+    source = loaded.source;
+  } catch (err: any) {
+    console.error('[Scheduler] Critical Firestore load error:', err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      error: 'FIRESTORE_DATA_ACCESS_ERROR',
+      message: err?.message || 'Failed to load data from Firebase Admin Firestore in production',
+    });
+  }
 
   let usersScanned = users.length;
   let liabilitiesScanned = 0;
@@ -424,28 +495,71 @@ export default async function handler(req: any, res: any) {
   let h3Due = 0;
   let h1Due = 0;
   let todayDue = 0;
-  let subscriptionsFound = 0;
+
+  let subscriptionsFoundGlobal = 0;
+  let subscriptionsFoundForDueUsers = 0;
+
   let pushesAttempted = 0;
   let pushesSent = 0;
   let pushesFailed = 0;
 
+  let alreadySentSkipped = 0;
+  let noSubscriptionSkipped = 0;
+  let invalidSubscriptionSkipped = 0;
+  let paidSkipped = 0;
+  let stateMismatchSkipped = 0;
+
+  const dueLiabilitiesTrace: Array<{
+    userId: string;
+    liabilityId: string;
+    reminderStage: string;
+    dueDate: string;
+    daysUntilDue: number;
+    h3Sent: boolean;
+    h1Sent: boolean;
+    dueDateSent: boolean;
+    subscriptionCountForThisUser: number;
+    skipReason: string | null;
+  }> = [];
+
   for (const user of users) {
-    const activeSubs = (user.pushSubscriptions || []).filter(
-      (s) => s.endpoint && s.keys && s.keys.p256dh && s.keys.auth && s.active !== false
-    );
-    subscriptionsFound += activeSubs.length;
+    // Subscriptions strictly partitioned for this user UID
+    const userSubs = user.pushSubscriptions || [];
+    const validSubsForUser: any[] = [];
+
+    for (const sub of userSubs) {
+      const isValid =
+        sub &&
+        typeof sub.endpoint === 'string' &&
+        sub.endpoint.startsWith('http') &&
+        sub.keys &&
+        typeof sub.keys.p256dh === 'string' &&
+        typeof sub.keys.auth === 'string' &&
+        sub.active !== false;
+
+      if (isValid) {
+        validSubsForUser.push(sub);
+      } else {
+        invalidSubscriptionSkipped++;
+      }
+    }
+
+    subscriptionsFoundGlobal += validSubsForUser.length;
 
     for (const liability of user.liabilities || []) {
       liabilitiesScanned++;
 
       const remaining = Number(liability.totalRemaining);
-      if (isNaN(remaining) || remaining <= 0) {
+      const isPaid = liability.status === 'paid' || liability.isPaid === true;
+      if (isNaN(remaining) || remaining <= 0 || isPaid) {
+        paidSkipped++;
         continue;
       }
       activeLiabilities++;
 
       const parsedDue = parseLiabilityDueDate(liability.dueDate);
       if (!parsedDue) {
+        stateMismatchSkipped++;
         continue;
       }
 
@@ -463,41 +577,68 @@ export default async function handler(req: any, res: any) {
         };
       }
 
-      let shouldSend = false;
-      let stage = '';
-      let title = 'Pengingat InputMi';
-      let body = '';
+      // Check if liability matches reminder windows (H-3, H-1, or Hari H)
+      let stage: 'h3' | 'h1' | 'dueDate' | null = null;
+      let alreadySent = false;
+      let stageTitle = '';
+      let stageBody = '';
 
       if (diffDays === 0) {
         todayDue++;
-        if (!state.dueDateSent) {
-          shouldSend = true;
-          stage = 'dueDate';
-          title = 'Pengingat Jatuh Tempo Hari Ini';
-          body = `Kewajiban "${liability.name || 'Tagihan'}" jatuh tempo hari ini. Segera lakukan pelunasan.`;
-        }
+        stage = 'dueDate';
+        alreadySent = !!state.dueDateSent;
+        stageTitle = 'Pengingat Jatuh Tempo Hari Ini';
+        stageBody = `Kewajiban "${liability.name || 'Tagihan'}" jatuh tempo hari ini. Segera lakukan pelunasan.`;
       } else if (diffDays === 1) {
         h1Due++;
-        if (!state.h1Sent) {
-          shouldSend = true;
-          stage = 'h1';
-          title = 'Pengingat Jatuh Tempo Besok';
-          body = `Kewajiban "${liability.name || 'Tagihan'}" jatuh tempo besok (H-1).`;
-        }
+        stage = 'h1';
+        alreadySent = !!state.h1Sent;
+        stageTitle = 'Pengingat Jatuh Tempo Besok';
+        stageBody = `Kewajiban "${liability.name || 'Tagihan'}" jatuh tempo besok (H-1).`;
       } else if (diffDays === 3) {
         h3Due++;
-        if (!state.h3Sent) {
-          shouldSend = true;
-          stage = 'h3';
-          title = 'Pengingat Jatuh Tempo 3 Hari Lagi';
-          body = `Kewajiban "${liability.name || 'Tagihan'}" jatuh tempo dalam 3 hari (H-3).`;
-        }
+        stage = 'h3';
+        alreadySent = !!state.h3Sent;
+        stageTitle = 'Pengingat Jatuh Tempo 3 Hari Lagi';
+        stageBody = `Kewajiban "${liability.name || 'Tagihan'}" jatuh tempo dalam 3 hari (H-3).`;
       }
 
-      if (shouldSend && activeSubs.length > 0) {
+      if (!stage) {
+        // Not in reminder stage window
+        continue;
+      }
+
+      // This liability is due: track subscriptions available specifically for this user
+      subscriptionsFoundForDueUsers += validSubsForUser.length;
+
+      let skipReason: string | null = null;
+      if (alreadySent) {
+        skipReason = 'ALREADY_SENT';
+        alreadySentSkipped++;
+      } else if (validSubsForUser.length === 0) {
+        skipReason = 'NO_ACTIVE_SUBSCRIPTION';
+        noSubscriptionSkipped++;
+      }
+
+      // Record safe diagnostic trace (no financial amounts or names)
+      dueLiabilitiesTrace.push({
+        userId: user.userId,
+        liabilityId: liability.id,
+        reminderStage: stage,
+        dueDate: parsedDue.dateString,
+        daysUntilDue: diffDays,
+        h3Sent: !!state.h3Sent,
+        h1Sent: !!state.h1Sent,
+        dueDateSent: !!state.dueDateSent,
+        subscriptionCountForThisUser: validSubsForUser.length,
+        skipReason,
+      });
+
+      // If eligible, dispatch push notifications to this user's subscriptions only
+      if (!skipReason && validSubsForUser.length > 0) {
         const payload = JSON.stringify({
-          title,
-          body,
+          title: stageTitle,
+          body: stageBody,
           icon: '/icon-192.png',
           badge: '/icon-192.png',
           tag: `liability-${liability.id}-${stage}`,
@@ -509,9 +650,9 @@ export default async function handler(req: any, res: any) {
           },
         });
 
-        let anyPushSucceeded = false;
+        let successfulPushesForLiability = 0;
 
-        for (const sub of activeSubs) {
+        for (const sub of validSubsForUser) {
           pushesAttempted++;
           try {
             await webpush.sendNotification(
@@ -529,25 +670,25 @@ export default async function handler(req: any, res: any) {
               }
             );
             pushesSent++;
-            anyPushSucceeded = true;
+            successfulPushesForLiability++;
           } catch (pushErr: any) {
             pushesFailed++;
-            console.warn(`[Scheduler] Push delivery failed to endpoint ${sub.endpoint}:`, pushErr?.message);
+            console.warn(`[Scheduler] Push delivery failed for user ${user.userId}:`, pushErr?.message);
           }
         }
 
-        // Update reminderState in Firestore
-        const updatedState = {
-          ...state,
-          h3Sent: stage === 'h3' ? true : !!state.h3Sent,
-          h1Sent: stage === 'h1' ? true : !!state.h1Sent,
-          dueDateSent: stage === 'dueDate' ? true : !!state.dueDateSent,
-          lastEvaluatedDueDate: parsedDue.dateString,
-          updatedAt: Date.now(),
-        };
+        // CRITICAL: Only mark sent if at least one push notification succeeded!
+        if (successfulPushesForLiability > 0) {
+          const updatedState = {
+            ...state,
+            h3Sent: stage === 'h3' ? true : !!state.h3Sent,
+            h1Sent: stage === 'h1' ? true : !!state.h1Sent,
+            dueDateSent: stage === 'dueDate' ? true : !!state.dueDateSent,
+            lastEvaluatedDueDate: parsedDue.dateString,
+            updatedAt: Date.now(),
+          };
 
-        if (anyPushSucceeded || pushesAttempted > 0) {
-          await updateLiabilityReminderState(user.userId, liability.id, updatedState);
+          await updateLiabilityReminderState(user.userId, liability.id, updatedState, prodMode);
         }
       }
     }
@@ -555,6 +696,7 @@ export default async function handler(req: any, res: any) {
 
   const diagnosticResponse = {
     ok: true,
+    source,
     todayJakarta,
     usersScanned,
     liabilitiesScanned,
@@ -562,10 +704,18 @@ export default async function handler(req: any, res: any) {
     h3Due,
     h1Due,
     todayDue,
-    subscriptionsFound,
+    subscriptionsFound: subscriptionsFoundGlobal,
+    subscriptionsFoundGlobal,
+    subscriptionsFoundForDueUsers,
     pushesAttempted,
     pushesSent,
     pushesFailed,
+    alreadySentSkipped,
+    noSubscriptionSkipped,
+    invalidSubscriptionSkipped,
+    paidSkipped,
+    stateMismatchSkipped,
+    dueLiabilitiesTrace,
   };
 
   console.log('[Scheduler] Diagnostic run output:', diagnosticResponse);
